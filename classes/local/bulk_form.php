@@ -20,10 +20,13 @@ namespace tool_bass\local;
  * The bulk settings form: one activity's own edit form, turned into a form of settings to change.
  *
  * The form is the activity type's real mod form, built for a representative activity of the
- * course (the first eligible one in course order), so its settings, sections, order, help,
+ * course (the first eligible one in course order whose form locks nothing), so its settings, sections, order, help,
  * rules and show/hide dependencies are exactly those of the edit page. It is then decorated:
  * - per-activity content is removed: name, description, every editor, file and date field,
  *   ID number, tags, access restrictions, competencies, outcomes and repeated fields;
+ * - settings the representative's own data locks (e.g. Safe Exam Browser once a quiz has
+ *   attempts) are offered unlocked, without the lock notice: whether each selected activity can
+ *   take the change is reported per activity in the preview ({@see planner});
  * - every remaining setting gets its own "Change" box (bass_change[<element name>]) and is
  *   disabled while the box is unticked;
  * - the grade to pass gets an "as a percentage of each activity's maximum grade" choice, and
@@ -70,6 +73,9 @@ class bulk_form {
         'buttonar', 'unlockcompletion',
     ];
 
+    /** @var array[] notices that a setting is locked on the representative: [string id, component]. */
+    protected const LOCK_NOTICES = [['settingsfrozen', 'quizaccess_seb']];
+
     /** @var string[] section headers whose whole content is out of scope. */
     protected const EXCLUDED_HEADERS = ['availabilityconditionsheader', 'tagshdr', 'competenciessection'];
 
@@ -82,6 +88,9 @@ class bulk_form {
     /** @var array[] setting name => ['label' => string, 'section' => string, 'sectionlabel' => string,
      *      'roots' => string[], 'completion' => bool], in form order */
     protected array $settings = [];
+
+    /** @var string[] settings that are locked on the representative and offered unlocked here. */
+    protected array $unlocked = [];
 
     /**
      * Build the bulk form of an activity type from a representative activity.
@@ -110,7 +119,12 @@ class bulk_form {
     }
 
     /**
-     * The bulk form built from the first eligible activity whose settings form can be built.
+     * The bulk form built from the first eligible activity whose settings form locks nothing.
+     *
+     * An activity's own data can lock some of its settings (a quiz with attempts locks its Safe
+     * Exam Browser settings, and may then drop the template choice altogether). The first activity
+     * without such locks is the best template; when every activity has some, the first one whose
+     * form can be built is used, with its locked settings offered unlocked.
      *
      * @param \stdClass[] $eligible activity_lister entries of one type, in course order
      * @param \moodle_url $action the bulk page
@@ -118,9 +132,14 @@ class bulk_form {
      * @return self|null null when no activity's form can be built
      */
     public static function for_first(array $eligible, \moodle_url $action, ?array $post): ?self {
+        $fallback = null;
         foreach ($eligible as $entry) {
             try {
-                return new self($entry->cm, $action, $post);
+                $form = new self($entry->cm, $action, $post);
+                if (!$form->unlocked) {
+                    return $form;
+                }
+                $fallback ??= $form;
             } catch (\Throwable $e) {
                 // This activity's form cannot be built here (for example a module that needs a
                 // request parameter, or one that calls a server): try the next.
@@ -128,7 +147,7 @@ class bulk_form {
                     ' could not be built: ' . $e->getMessage(), DEBUG_DEVELOPER);
             }
         }
-        return null;
+        return $fallback;
     }
 
     /**
@@ -165,6 +184,15 @@ class bulk_form {
      */
     public function get_settings(): array {
         return $this->settings;
+    }
+
+    /**
+     * The settings that are locked on the representative and offered unlocked.
+     *
+     * @return string[]
+     */
+    public function get_unlocked(): array {
+        return array_values($this->unlocked);
     }
 
     /**
@@ -252,7 +280,7 @@ class bulk_form {
         if (in_array($name, self::EXCLUDED_NAMES, true) || str_contains($name, '[') || str_starts_with($name, 'outcome_')) {
             return false;
         }
-        if (self::has_excluded_type($element) || $element->isFrozen()) {
+        if (self::has_excluded_type($element)) {
             return false;
         }
         return (bool) self::roots($element);
@@ -272,6 +300,7 @@ class bulk_form {
         $section = '';
         $sectionlabel = '';
         $removed = [];
+        $unfrozen = [];
         $elements = $mform->_elements;
         foreach ($elements as $index => $element) {
             $type = $element->getType();
@@ -288,9 +317,16 @@ class bulk_form {
                 // The edit page's own hidden fields stay: its rules and dependencies may refer to them.
                 $keep[$index] = $name !== '' && !str_contains($name, '[') && !str_starts_with($name, '_qf__');
             } else if (in_array($type, ['static', 'html'], true)) {
-                $keep[$index] = !in_array($name, ['gradeboundarystatic1', 'gradeboundarystatic2', 'restrictgroupbutton'], true);
+                $keep[$index] = !in_array($name, ['gradeboundarystatic1', 'gradeboundarystatic2', 'restrictgroupbutton'], true)
+                    && !self::is_lock_notice($element);
             } else if (self::is_setting($element)) {
                 $keep[$index] = true;
+                if ($element->isFrozen()) {
+                    // Locked by the representative's own data: offered unlocked, checked per activity.
+                    $element->unfreeze();
+                    $unfrozen[] = $element;
+                    $this->unlocked[$name] = $name;
+                }
                 if (isset($this->settings[$name])) {
                     // A further radio button of the same setting (completion tracking is three radios).
                     continue;
@@ -364,7 +400,8 @@ class bulk_form {
         }
         $this->rebuild($final);
         $this->prune_dependencies($removed);
-        foreach ($added as $element) {
+        // Added and unlocked elements take the posted values (a frozen element ignored them).
+        foreach (array_merge($added, $unfrozen) as $element) {
             $element->onQuickFormEvent('updateValue', null, $mform);
         }
         foreach (array_keys($this->settings) as $name) {
@@ -400,6 +437,25 @@ class bulk_form {
                 $mform->setExpanded($setting['section'], true);
             }
         }
+    }
+
+    /**
+     * Whether an element is a notice that settings are locked on the representative.
+     *
+     * @param \HTML_QuickForm_element $element a static or html element
+     * @return bool
+     */
+    protected static function is_lock_notice(\HTML_QuickForm_element $element): bool {
+        $html = (string) ($element->_text ?? '');
+        foreach (self::LOCK_NOTICES as [$identifier, $component]) {
+            if (
+                get_string_manager()->string_exists($identifier, $component)
+                    && str_contains($html, get_string($identifier, $component))
+            ) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

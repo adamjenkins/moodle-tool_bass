@@ -157,6 +157,73 @@ final class planner_test extends \advanced_testcase {
     }
 
     /**
+     * Safe Exam Browser settings are offered when a quiz has attempts; the preview refuses that quiz only.
+     */
+    public function test_seb_on_quizzes_with_attempts(): void {
+        global $CFG;
+        require_once($CFG->dirroot . '/mod/quiz/locallib.php');
+        $course = $this->create_bass_course();
+        $student = $this->getDataGenerator()->create_and_enrol($course, 'student');
+        $template = $this->getDataGenerator()->get_plugin_generator('quizaccess_seb')->create_template(['name' => 'Exam room']);
+        $questiongenerator = $this->getDataGenerator()->get_plugin_generator('core_question');
+        $category = $questiongenerator->create_question_category();
+        $quizzes = [];
+        foreach ([true, false, false] as $attempted) {
+            $quiz = $this->getDataGenerator()->create_module('quiz', ['course' => $course->id, 'sumgrades' => 1]);
+            $question = $questiongenerator->create_question('truefalse', null, ['category' => $category->id]);
+            quiz_add_quiz_question($question->id, $quiz);
+            if ($attempted) {
+                // As the student: the admin's attempt would be a preview, which locks nothing.
+                $this->setUser($student);
+                $this->getDataGenerator()->get_plugin_generator('mod_quiz')->create_attempt($quiz->id, $student->id);
+                $this->setAdminUser();
+            }
+            $quizzes[] = $this->bass_cm((int) $quiz->cmid);
+        }
+        $this->assertTrue(settings_provider::is_seb_settings_locked($quizzes[0]->instance));
+        $this->set_bass_page($course, 'quiz');
+        $values = [
+            'seb_requiresafeexambrowser' => settings_provider::USE_SEB_TEMPLATE,
+            'seb_templateid' => $template->get('id'),
+        ];
+        $ticked = ['seb_requiresafeexambrowser', 'seb_templateid'];
+
+        // A form built on the quiz with attempts offers its locked settings unlocked, without the lock notice.
+        $lockedform = $this->bass_form($quizzes[0], $values, $ticked);
+        $this->assertTrue($lockedform->has_setting('seb_requiresafeexambrowser'));
+        $this->assertContains('seb_requiresafeexambrowser', $lockedform->get_unlocked());
+        $this->assertFalse($lockedform->get_element('seb_requiresafeexambrowser')->isFrozen());
+        $this->assertStringNotContainsString(get_string('settingsfrozen', 'quizaccess_seb'), $lockedform->render());
+
+        // The page's form is built on the first quiz that locks nothing: the template choice is there too.
+        $post = $values + [bulk_form::CHANGE => array_fill_keys($ticked, 1), bulk_form::MARKER => 1];
+        $eligible = activity_lister::get_eligible((int) $course->id, 'quiz');
+        $form = bulk_form::for_first($eligible, $this->bass_url($course, 'quiz'), $post);
+        $this->assertEquals($quizzes[1]->id, $form->get_representative()->id);
+        $this->assertSame([], $form->get_unlocked());
+        $this->assertTrue($form->has_setting('seb_templateid'));
+
+        // The preview says which quiz cannot take the change; the others can.
+        $plans = $this->plan($form, $quizzes);
+        $this->assertFalse($plans[$quizzes[0]->id]->can_apply());
+        $this->assertStringContainsString(
+            get_string('error_frozen', 'tool_bass'),
+            implode(' ', $plans[$quizzes[0]->id]->get_errors())
+        );
+        $this->assertTrue($plans[$quizzes[1]->id]->can_apply(), implode(' ', $plans[$quizzes[1]->id]->get_errors()));
+        $this->assertTrue($plans[$quizzes[2]->id]->can_apply(), implode(' ', $plans[$quizzes[2]->id]->get_errors()));
+        $results = $this->apply($plans);
+
+        $this->assertSame(apply_result::SKIPPED, $results[$quizzes[0]->id]->status);
+        $this->assertFalse(seb_quiz_settings::get_record(['quizid' => $quizzes[0]->instance]));
+        foreach ([1, 2] as $i) {
+            $this->assertSame(apply_result::APPLIED, $results[$quizzes[$i]->id]->status);
+            $settings = seb_quiz_settings::get_record(['quizid' => $quizzes[$i]->instance]);
+            $this->assertEquals($template->get('id'), $settings->get('templateid'));
+        }
+    }
+
+    /**
      * Grade to pass as a percentage of each assignment's own maximum grade; unticked settings keep each activity's value.
      */
     public function test_gradepass_percent_and_unticked_settings(): void {

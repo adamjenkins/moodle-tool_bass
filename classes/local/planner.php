@@ -20,8 +20,9 @@ namespace tool_bass\local;
  * Plans a change request for the selected activities.
  *
  * Per activity: read its current settings from its own edit form
- * ({@see module_form::current_post()}), replace the ticked settings, work out the grade to
- * pass from a percentage and the quiz maximum grade, read the form again as a browser would
+ * ({@see module_form::current_state()}), refuse ticked settings that form lacks or locks,
+ * replace the ticked settings, work out the grade to pass from a percentage and the quiz
+ * maximum grade, read the form again as a browser would
  * post it with those values ({@see module_form::browser_post()}), compare old and new values,
  * and, when something changes, post the result to the activity's edit form to run the form's
  * own validation — so the preview reports exactly what Save on the edit page would refuse.
@@ -91,10 +92,36 @@ class planner {
             return $plan;
         }
 
+        $names = array_values(array_filter(
+            $request->ticked,
+            fn($name) => $name !== bulk_form::MAXGRADE && isset($settings[$name])
+        ));
         try {
-            $current = module_form::current_post($cm);
+            [$current, $unavailable] = module_form::current_state($cm, $names);
         } catch (\Throwable $e) {
             $plan->add_error(get_string('error_form', 'tool_bass', $e->getMessage()));
+            return $plan;
+        }
+
+        // A setting this activity's form lacks or locks (Safe Exam Browser on a quiz with attempts)
+        // cannot take a new value: the edit page would keep the old one without a word. Asking for
+        // the value it already has is fine.
+        // A lock can also drop fields (a locked quiz has no template choice): the lock is the reason given.
+        if (in_array('frozen', $unavailable, true)) {
+            $unavailable = array_filter($unavailable, fn($why) => $why === 'frozen');
+        }
+        $locked = false;
+        foreach ($unavailable as $name => $why) {
+            $roots = $settings[$name]['roots'];
+            if (!post_values::same(post_values::subset($current, $roots), post_values::subset($request->values, $roots))) {
+                $plan->add_error(get_string('error_setting', 'tool_bass', (object) [
+                    'label' => $settings[$name]['label'],
+                    'message' => get_string($why === 'frozen' ? 'error_frozen' : 'error_notinform', 'tool_bass'),
+                ]));
+                $locked = true;
+            }
+        }
+        if ($locked) {
             return $plan;
         }
 

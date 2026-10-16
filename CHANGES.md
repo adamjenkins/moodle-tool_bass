@@ -10,7 +10,9 @@
 - Each activity is saved through its own settings form, so its own rules,
   validation and save code apply, as on the edit page.
 - Quizzes: Safe Exam Browser can be set in bulk, including "Yes – Use an
-  existing template" with a site template.
+  existing template" with a site template. The settings are offered even when
+  some quizzes already have attempts; the preview lists those quizzes as not
+  updatable and they are skipped.
 - Grade to pass as a percentage of each activity's maximum grade works for every
   graded type; the quiz maximum grade can still be changed.
 - Saved configurations and admin presets now belong to one activity type. Admin

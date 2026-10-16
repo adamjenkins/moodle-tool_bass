@@ -186,9 +186,33 @@ final class module_form {
      * @return array the POST data (PHP's own array shape for names like a[b])
      */
     public static function current_post(\cm_info $cm): array {
-        return self::without_page_js(fn() => self::isolated([], function () use ($cm) {
+        return self::current_state($cm, [])[0];
+    }
+
+    /**
+     * An activity's current settings ({@see current_post()}) and which of some settings it cannot take.
+     *
+     * A setting cannot be changed on an activity whose edit form does not have it, or shows it
+     * locked (frozen): a quiz with attempts locks its Safe Exam Browser settings, and may drop
+     * the template choice altogether.
+     *
+     * @param \cm_info $cm
+     * @param string[] $names setting (element) names
+     * @return array [array the POST data, string[] name => 'missing' or 'frozen', for the names it lacks or locks]
+     */
+    public static function current_state(\cm_info $cm, array $names): array {
+        return self::without_page_js(fn() => self::isolated([], function () use ($cm, $names) {
             [$form] = self::build_in_request($cm, null, []);
-            return self::browser_post_of($form);
+            $quickform = self::quickform($form);
+            $unavailable = [];
+            foreach ($names as $name) {
+                if (!$quickform->elementExists($name)) {
+                    $unavailable[$name] = 'missing';
+                } else if ($quickform->getElement($name)->isFrozen()) {
+                    $unavailable[$name] = 'frozen';
+                }
+            }
+            return [self::browser_post_of($form), $unavailable];
         }));
     }
 

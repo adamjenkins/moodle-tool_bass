@@ -68,8 +68,10 @@ is rolled back and reported, and the others are still changed.
 Every setting of the type's settings form, except per-activity content: the
 name, the description, every text editor, file and date field, the ID number,
 tags, access restrictions, competencies, outcomes and repeated fields (such as a
-quiz's overall feedback). Settings that are locked for an activity (for example
-by its permissions) cannot be changed on it, and the preview says so.
+quiz's overall feedback). A setting is offered even when some activities lock
+it (for example a quiz's Safe Exam Browser settings once it has attempts, or
+settings your permissions do not allow): the preview lists each activity that
+cannot take the change, says why, and skips it.
 
 Extras:
 

@@ -23,6 +23,13 @@ All notable changes to `tool_bass` are documented in this file. Versions before
   `update_moduleinfo()` saves it. The hand-written quiz catalogue, planner rules
   and applier steps are gone.
 - Activities whose grade item is locked are skipped entirely.
+- The settings form is built from the first eligible activity whose form locks
+  nothing; when every activity locks something, settings locked on the
+  representative are unfrozen and the lock notice (quizaccess_seb
+  `settingsfrozen`) is dropped. The planner checks each activity's own form for
+  ticked settings it lacks or locks (`module_form::current_state()`) before
+  comparing values, so a locked activity is reported in the preview instead of
+  reading as "no change".
 - Admin presets are saved from a course page ("Save as an admin preset");
   `presets.php` lists and deletes them.
 
@@ -33,7 +40,8 @@ All notable changes to `tool_bass` are documented in this file. Versions before
 - Quiz Safe Exam Browser settings, including a site template.
 - PHPUnit: a save with nothing changed keeps every stored setting for 16 core
   activity types; Safe Exam Browser template on several quizzes; grade to pass
-  as a percentage; quiz maximum grade; per-activity validation; locked grade
+  as a percentage; Safe Exam Browser on quizzes with attempts; quiz maximum
+  grade; per-activity validation; locked grade
   items; completion reset; fingerprint; saved configurations.
 - `pix/icon.svg`.
 
