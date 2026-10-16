@@ -258,7 +258,9 @@ echo $OUTPUT->render_from_template('tool_bass/savedconfigs', [
 
 [$representativename] = activitytable::activity_name($form->get_representative());
 echo html_writer::tag('h3', s(get_string('settingsheading', 'tool_bass')));
-echo html_writer::tag('p', get_string('representative', 'tool_bass', $representativename));
+echo html_writer::tag('p', $form->is_new()
+    ? get_string('representativenew', 'tool_bass', \core_text::strtolower(get_string('modulename', $form->get_modname())))
+    : get_string('representative', 'tool_bass', $representativename));
 
 if ($previewdata) {
     [$preview, $fingerprint] = $previewdata;

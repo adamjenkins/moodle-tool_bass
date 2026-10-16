@@ -241,6 +241,44 @@ final class planner_test extends \advanced_testcase {
     }
 
     /**
+     * When every quiz has attempts, the form starts from a new quiz's, so the template choice is offered.
+     */
+    public function test_seb_template_offered_when_every_quiz_has_attempts(): void {
+        global $CFG;
+        require_once($CFG->dirroot . '/mod/quiz/locallib.php');
+        $course = $this->create_bass_course();
+        $student = $this->getDataGenerator()->create_and_enrol($course, 'student');
+        $template = $this->getDataGenerator()->get_plugin_generator('quizaccess_seb')->create_template(['name' => 'Exam room']);
+        $questiongenerator = $this->getDataGenerator()->get_plugin_generator('core_question');
+        $category = $questiongenerator->create_question_category();
+        $quiz = $this->getDataGenerator()->create_module('quiz', ['course' => $course->id, 'sumgrades' => 1]);
+        $question = $questiongenerator->create_question('truefalse', null, ['category' => $category->id]);
+        quiz_add_quiz_question($question->id, $quiz);
+        $this->setUser($student);
+        $this->getDataGenerator()->get_plugin_generator('mod_quiz')->create_attempt($quiz->id, $student->id);
+        $this->setAdminUser();
+        $cm = $this->bass_cm((int) $quiz->cmid);
+        $this->set_bass_page($course, 'quiz');
+
+        // The quiz's own form has no template choice: SEB removes it once there are attempts.
+        $this->assertFalse($this->bass_form($cm, [], [])->has_setting('seb_templateid'));
+
+        $values = ['seb_requiresafeexambrowser' => settings_provider::USE_SEB_TEMPLATE, 'seb_templateid' => $template->get('id')];
+        $post = $values + [bulk_form::CHANGE => ['seb_requiresafeexambrowser' => 1, 'seb_templateid' => 1], bulk_form::MARKER => 1];
+        $eligible = activity_lister::get_eligible((int) $course->id, 'quiz');
+        $form = bulk_form::for_first($eligible, $this->bass_url($course, 'quiz'), $post);
+        $this->assertTrue($form->is_new());
+        $this->assertSame([], $form->get_unlocked());
+        $this->assertTrue($form->has_setting('seb_templateid'));
+        $this->assertStringContainsString('Exam room', $form->render());
+
+        // The quiz itself still cannot take the change, and the preview says so.
+        $plans = $this->plan($form, [$cm]);
+        $this->assertFalse($plans[$cm->id]->can_apply());
+        $this->assertStringContainsString(get_string('error_frozen', 'tool_bass'), implode(' ', $plans[$cm->id]->get_errors()));
+    }
+
+    /**
      * Grade to pass as a percentage of each assignment's own maximum grade; unticked settings keep each activity's value.
      */
     public function test_gradepass_percent_and_unticked_settings(): void {

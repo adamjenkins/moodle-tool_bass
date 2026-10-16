@@ -87,6 +87,7 @@ $string['previewsummary'] = 'Activities that will change: {$a->change}. Already 
 $string['privacy:metadata'] = 'The Bulk Activity Settings Selector changes activity settings. Its saved configurations hold settings and activity selections for a course or the site, and no personal data.';
 $string['rejectedcmids'] = '{$a} of the selected activities cannot be edited by you and were ignored.';
 $string['representative'] = 'The settings below start from the current settings of {$a}. Only the settings with a ticked "Change" box are changed, on every selected activity.';
+$string['representativenew'] = 'Every activity of this type in the course has settings that its own data locks (for example a quiz with attempts), so the settings below start from those of a new {$a}. Only the settings with a ticked "Change" box are changed, on every selected activity; the preview shows which activities cannot take a change.';
 $string['resultfailed'] = 'Changing {$a->name} failed, so nothing was changed in it: {$a->messages}';
 $string['resultskipped'] = '{$a->name} was not changed: {$a->messages}';
 $string['resultsummary'] = 'Activities changed: {$a->applied}. Already as requested: {$a->nochange}. Skipped: {$a->skipped}. Failed: {$a->failed}.';

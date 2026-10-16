@@ -98,20 +98,24 @@ class bulk_form {
      * @param \cm_info $representative an eligible activity of the type
      * @param \moodle_url $action the bulk page
      * @param array|null $post the bulk form's posted (or loaded) values, null when nothing was posted
+     * @param bool $asnew start from the form for a new activity of the type, in the representative's
+     *     course and section, instead of the representative's own form
      */
     public function __construct(
         /** @var \cm_info the activity whose form is the template */
         protected \cm_info $representative,
         \moodle_url $action,
         ?array $post,
+        /** @var bool whether the form is a new activity's form */
+        protected bool $asnew = false,
     ) {
         // The JavaScript the mod form adds while it is built is discarded: it belongs to fields that
         // are removed here (the access restrictions widget throws without its field, and stops the
         // form's other scripts). What rendering adds (the form's dependencies, each field's own
         // scripts) is kept, because render() runs later, on the page.
-        module_form::without_page_js(function () use ($representative, $post, $action) {
+        module_form::without_page_js(function () use ($representative, $post, $action, $asnew) {
             // Completion settings are offered unlocked; each activity's own lock is handled per activity.
-            $this->form = module_form::for_display($representative, $post, ['completionunlocked' => 1]);
+            $this->form = module_form::for_display($representative, $post, ['completionunlocked' => 1], $asnew);
             $this->mform = module_form::quickform($this->form);
             module_form::finalise($this->form);
             $this->decorate($action);
@@ -122,9 +126,10 @@ class bulk_form {
      * The bulk form built from the first eligible activity whose settings form locks nothing.
      *
      * An activity's own data can lock some of its settings (a quiz with attempts locks its Safe
-     * Exam Browser settings, and may then drop the template choice altogether). The first activity
-     * without such locks is the best template; when every activity has some, the first one whose
-     * form can be built is used, with its locked settings offered unlocked.
+     * Exam Browser settings, and drops the template choice when it does not use one). The first
+     * activity without such locks is the best template. When every activity has some, the form for
+     * a new activity of the type is used, which no activity's data locks; failing that, the first
+     * activity's form, with its locked settings offered unlocked.
      *
      * @param \stdClass[] $eligible activity_lister entries of one type, in course order
      * @param \moodle_url $action the bulk page
@@ -147,7 +152,24 @@ class bulk_form {
                     ' could not be built: ' . $e->getMessage(), DEBUG_DEVELOPER);
             }
         }
+        if ($fallback) {
+            try {
+                return new self($fallback->representative, $action, $post, true);
+            } catch (\Throwable $e) {
+                debugging('tool_bass: the settings form of a new ' . $fallback->get_modname() .
+                    ' could not be built: ' . $e->getMessage(), DEBUG_DEVELOPER);
+            }
+        }
         return $fallback;
+    }
+
+    /**
+     * Whether the form is the form for a new activity of the type ({@see for_first()}).
+     *
+     * @return bool
+     */
+    public function is_new(): bool {
+        return $this->asnew;
     }
 
     /**

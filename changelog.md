@@ -26,9 +26,11 @@ repository (Composer would otherwise prefer the old 0.1.2).
   and applier steps are gone.
 - Activities whose grade item is locked are skipped entirely.
 - The settings form is built from the first eligible activity whose form locks
-  nothing; when every activity locks something, settings locked on the
-  representative are unfrozen and the lock notice (quizaccess_seb
-  `settingsfrozen`) is dropped. The planner checks each activity's own form for
+  nothing; when every activity locks something, from the form for a new activity
+  of the type (`module_form::build_in_request()` `$asnew`, as `modedit.php?add=`),
+  so a choice the lock removes (the Safe Exam Browser template) is still offered.
+  If that form cannot be built, settings locked on the first activity are
+  unfrozen and the lock notice (quizaccess_seb `settingsfrozen`) is dropped. The planner checks each activity's own form for
   ticked settings it lacks or locks (`module_form::current_state()`) before
   comparing values, so a locked activity is reported in the preview instead of
   reading as "no change".

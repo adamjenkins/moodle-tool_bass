@@ -129,9 +129,11 @@ final class module_form {
      * @param \cm_info $cm
      * @param array|null $post the posted values (the form is then submitted), or null
      * @param array $overrides values to put into the form's data before set_data()
-     * @return array [\moodleform_mod form, \stdClass course_modules record, \stdClass data]
+     * @param bool $asnew build the form for adding a new activity of the type in the activity's
+     *     section instead (as modedit.php?add=), which nothing about an existing activity locks
+     * @return array [\moodleform_mod form, \stdClass|null course_modules record, \stdClass data]
      */
-    protected static function build_in_request(\cm_info $cm, ?array $post, array $overrides): array {
+    protected static function build_in_request(\cm_info $cm, ?array $post, array $overrides, bool $asnew = false): array {
         global $CFG;
         require_once($CFG->dirroot . '/course/modlib.php');
 
@@ -148,9 +150,14 @@ final class module_form {
             $_REQUEST = $post;
         }
         $course = $cm->get_course();
-        $cmrecord = get_coursemodule_from_id('', $cm->id, 0, false, MUST_EXIST);
-        [$cmrecord, , , $data, $section] = get_moduleinfo_data($cmrecord, $course);
-        $data->update = $cm->id;
+        if ($asnew) {
+            [, , $section, $cmrecord, $data] = prepare_new_moduleinfo_data($course, $cm->modname, $cm->sectionnum);
+            $data->add = $cm->modname;
+        } else {
+            $cmrecord = get_coursemodule_from_id('', $cm->id, 0, false, MUST_EXIST);
+            [$cmrecord, , , $data, $section] = get_moduleinfo_data($cmrecord, $course);
+            $data->update = $cm->id;
+        }
         $data->return = 0;
         foreach ($overrides as $name => $value) {
             $data->$name = $value;
@@ -167,11 +174,12 @@ final class module_form {
      * @param \cm_info $cm
      * @param array|null $post the bulk page's posted values, or null when nothing was posted
      * @param array $overrides values to put into the form's data before set_data()
+     * @param bool $asnew the form for a new activity of the type instead ({@see build_in_request()})
      * @return \moodleform_mod
      */
-    public static function for_display(\cm_info $cm, ?array $post, array $overrides = []): \moodleform_mod {
-        return self::isolated([], function () use ($cm, $post, $overrides) {
-            [$form] = self::build_in_request($cm, $post, $overrides);
+    public static function for_display(\cm_info $cm, ?array $post, array $overrides = [], bool $asnew = false): \moodleform_mod {
+        return self::isolated([], function () use ($cm, $post, $overrides, $asnew) {
+            [$form] = self::build_in_request($cm, $post, $overrides, $asnew);
             return $form;
         });
     }
