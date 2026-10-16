@@ -1,7 +1,9 @@
 # Changes
 
-## v0.1.0
+## v0.2.0
 
+- First release of `tool_bass`. It is numbered after `tool_quizbulkedit`'s last
+  release (0.1.2) because both are published from the same repository.
 - New plugin: the Bulk Activity Settings Selector (`tool_bass`), which replaces
   Bulk edit quizzes (`tool_quizbulkedit`).
 - Choose an activity type, and every standard setting of that type's settings

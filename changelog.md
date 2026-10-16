@@ -1,9 +1,11 @@
 # Changelog
 
 All notable changes to `tool_bass` are documented in this file. Versions before
-0.1.0 are those of `tool_quizbulkedit`, the quiz-only plugin it replaces.
+0.2.0 are those of `tool_quizbulkedit`, the quiz-only plugin it replaces. The first
+`tool_bass` release is 0.2.0, numbered after them because both come from the same
+repository (Composer would otherwise prefer the old 0.1.2).
 
-## [0.1.0] - 2026-10-16
+## [0.2.0] - 2026-10-16
 
 ### Changed
 
