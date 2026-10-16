@@ -311,11 +311,15 @@ class bulk_form {
                 $keep[$index] = !in_array($name, self::EXCLUDED_HEADERS, true);
                 continue;
             }
-            if (in_array($section, self::EXCLUDED_HEADERS, true)) {
+            if ($type === 'hidden') {
+                // The edit page's own hidden fields stay, whatever section they follow: its rules and
+                // dependencies may refer to them, and the sesskey is added after definition()
+                // (moodleform::__construct()), so it follows the last section, which on a standard
+                // site is one dropped here (tags or competencies).
+                $keep[$index] = $name !== '' && !str_contains($name, '[') && !str_starts_with($name, '_qf__')
+                    && !in_array($name, self::EXCLUDED_NAMES, true);
+            } else if (in_array($section, self::EXCLUDED_HEADERS, true)) {
                 $keep[$index] = false;
-            } else if ($type === 'hidden') {
-                // The edit page's own hidden fields stay: its rules and dependencies may refer to them.
-                $keep[$index] = $name !== '' && !str_contains($name, '[') && !str_starts_with($name, '_qf__');
             } else if (in_array($type, ['static', 'html'], true)) {
                 $keep[$index] = !in_array($name, ['gradeboundarystatic1', 'gradeboundarystatic2', 'restrictgroupbutton'], true)
                     && !self::is_lock_notice($element);

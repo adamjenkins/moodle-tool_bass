@@ -157,6 +157,23 @@ final class planner_test extends \advanced_testcase {
     }
 
     /**
+     * The bulk form posts the sesskey and the edit page's hidden fields, which core adds after the last section.
+     */
+    public function test_bulk_form_keeps_the_hidden_fields(): void {
+        $course = $this->create_bass_course();
+        $assign = $this->getDataGenerator()->create_module('assign', ['course' => $course->id]);
+        $this->set_bass_page($course, 'assign');
+        $form = $this->bass_form($this->bass_cm((int) $assign->cmid), [], []);
+
+        // The sesskey and the edit page's hidden fields are rendered, although core adds them after the
+        // last section (tags or competencies on a standard site), which the bulk form drops.
+        $html = $form->render();
+        foreach (['sesskey', 'course', 'coursemodule', 'modulename'] as $hidden) {
+            $this->assertMatchesRegularExpression('/<input[^>]*name="' . $hidden . '"/', $html, $hidden);
+        }
+    }
+
+    /**
      * Safe Exam Browser settings are offered when a quiz has attempts; the preview refuses that quiz only.
      */
     public function test_seb_on_quizzes_with_attempts(): void {
