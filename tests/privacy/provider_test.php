@@ -17,13 +17,13 @@
 /**
  * Privacy provider tests.
  *
- * @package    tool_quizbulkedit
+ * @package    tool_bass
  * @category   test
  * @copyright  2026 Adam Jenkins <adam@wisecat.net>
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
-namespace tool_quizbulkedit\privacy;
+namespace tool_bass\privacy;
 
 use PHPUnit\Framework\Attributes\CoversClass;
 
@@ -39,6 +39,6 @@ final class provider_test extends \core_privacy\tests\provider_testcase {
         $this->assertInstanceOf(\core_privacy\local\metadata\null_provider::class, new provider());
         $reason = provider::get_reason();
         $this->assertSame('privacy:metadata', $reason);
-        $this->assertTrue(get_string_manager()->string_exists($reason, 'tool_quizbulkedit'));
+        $this->assertTrue(get_string_manager()->string_exists($reason, 'tool_bass'));
     }
 }

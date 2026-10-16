@@ -1,38 +1,36 @@
 # camp listing manifest — descriptive content for your plugin's page.
 # Edit freely and commit; camp ingests this file at each tagged release.
 # Schema: https://camp-registry.org/schema/listing.schema.json
-name: tool_quizbulkedit
-summary: 'A Moodle admin tool that changes the settings of some or all quizzes in a course in one go, with a preview before anything is saved.'
+name: tool_bass
+summary: 'Bulk Activity Settings Selector: change the settings of some or all activities of one type in a course in one go, with a preview before anything is saved.'
 description: |
-  For teachers and managers who need to change the same quiz settings across a
-  course. Tick the quizzes, tick a Change box for each setting to change (review
-  options, grade to pass in points or as a percentage of each quiz's maximum
-  grade, maximum grade, attempts, question behaviour, timing, display and
-  completion), then Preview shows each quiz's current and new values before
-  Apply changes. Teachers can save named configurations per course, and site
-  administrators can publish admin presets that every course can load.
+  For teachers and managers who need to change the same settings across many
+  activities of a course. Choose an activity type (quiz, assignment, forum, page,
+  or any other), tick the activities, and tick a Change box next to each setting
+  to change: every standard setting of that type's own settings form is offered,
+  in the same order and sections as on the Edit settings page, including what
+  other plugins add (for quizzes: Safe Exam Browser, set to a site template in
+  one go). Preview shows each activity's current and new values before Apply
+  changes, and each activity is saved through its own settings form, so its own
+  rules and validation apply. The grade to pass can be set as a percentage of
+  each activity's maximum grade. Teachers can save named configurations per
+  course, and site administrators can publish admin presets.
 labels:
   # Required disclosure labels — pick all that apply (RFC §4.7):
   #   fully-free | freemium | paid-service | external-account
   #   donation-supported | commercial-support-available
   - fully-free
 screenshots:
-  - path: .camp/screenshots/01-select-quizzes.png
-    caption: 'Filter the course''s quizzes by name and tick the ones to change. The table shows each quiz''s current values.'
-  - path: .camp/screenshots/02-grade-to-pass.png
-    caption: 'Only settings with a ticked Change box are written. Here the grade to pass is set to 60% of each quiz''s maximum grade.'
-  - path: .camp/screenshots/03-review-options.png
-    caption: 'Review options are changed row by row: Specific feedback and Right answer are set, and the other rows are left alone.'
+  - path: .camp/screenshots/01-choose-type.png
+    caption: 'Choose an activity type: the menu lists the types the course has activities of, with their number.'
+  - path: .camp/screenshots/02-activities.png
+    caption: 'The course''s activities of that type in course order, with a Filter by name box, then the type''s own settings.'
+  - path: .camp/screenshots/03-seb-template.png
+    caption: 'Every setting has its own Change box. Here quizzes are set to require Safe Exam Browser with a site template.'
   - path: .camp/screenshots/04-preview.png
-    caption: 'The preview lists each quiz''s current and new values, and warns where students already have completion data.'
-  - path: .camp/screenshots/05-confirm-and-apply.png
-    caption: Changes that would reset completion data need an explicit confirmation before Apply changes.
-  - path: .camp/screenshots/06-result.png
-    caption: 'After applying: a summary, and the table shows the new grades to pass (6 on 10-point quizzes, 12 on 20-point quizzes).'
-  - path: .camp/screenshots/07-saved-configurations.png
-    caption: Save settings and the ticked quizzes as a named configuration in the course, and load site-wide admin presets.
-  - path: .camp/screenshots/08-admin-presets.png
-    caption: Administrators manage the site-wide presets under Site administration > Plugins > Admin tools.
+    caption: Preview lists each activity's current and new values before anything is saved.
+  - path: .camp/screenshots/05-result.png
+    caption: After Apply changes, a summary of what was changed.
 links:
-  docs: https://github.com/adamjenkins/moodle-tool_quizbulkedit#readme
-  issues: https://github.com/adamjenkins/moodle-tool_quizbulkedit/issues
+  docs: https://github.com/adamjenkins/moodle-tool_bass#readme
+  issues: https://github.com/adamjenkins/moodle-tool_bass/issues

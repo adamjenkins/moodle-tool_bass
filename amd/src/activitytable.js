@@ -14,21 +14,21 @@
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Filter the quiz table by name, drive its select-all checkbox, and mark a preview
+ * Filter the activity table by name, drive its select-all checkbox, and mark a preview
  * stale when the settings or the selection change after it.
  *
  * The select-all acts on the rows the filter shows only; hidden rows keep their
  * ticks, and the select-all reflects the shown rows only. The stale bar and the
  * disabled Apply changes button are a convenience: the server refuses an apply
- * whose request, selection or quizzes no longer match the preview's fingerprint.
+ * whose request, selection or activities no longer match the preview's fingerprint.
  *
- * @module     tool_quizbulkedit/quiztable
+ * @module     tool_bass/activitytable
  * @copyright  2026 Adam Jenkins <adam@wisecat.net>
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
 /** @var {string[]} Names of form controls whose changes do not make a preview stale. */
-const UNWATCHED = ['sesskey', 'courseid', 'fingerprint', 'confirmreset'];
+const UNWATCHED = ['sesskey', 'courseid', 'modname', 'fingerprint', 'confirmreset', 'configname', 'aspreset'];
 
 /**
  * Whether an element's table row is shown (not hidden by the name filter).
@@ -42,17 +42,17 @@ const shown = element => {
 };
 
 /**
- * Set up the name filter and the select-all checkbox of the quiz table.
+ * Set up the name filter and the select-all checkbox of the activity table.
  *
- * @param {HTMLElement} wrapper the quiz table wrapper.
+ * @param {HTMLElement} wrapper the activity table wrapper.
  */
 const initTable = wrapper => {
-    const selectAll = wrapper.querySelector('[data-region="tool_quizbulkedit-selectall"]');
-    const checkboxes = () => Array.from(wrapper.querySelectorAll('[data-region="tool_quizbulkedit-select"]'));
+    const selectAll = wrapper.querySelector('[data-region="tool_bass-selectall"]');
+    const checkboxes = () => Array.from(wrapper.querySelectorAll('[data-region="tool_bass-select"]'));
     const shownCheckboxes = () => checkboxes().filter(shown);
 
     /**
-     * Tick the select-all checkbox only when every quiz the filter shows is selected.
+     * Tick the select-all checkbox only when every activity the filter shows is selected.
      */
     const syncSelectAll = () => {
         if (!selectAll) {
@@ -73,13 +73,13 @@ const initTable = wrapper => {
     checkboxes().forEach(checkbox => checkbox.addEventListener('change', syncSelectAll));
     syncSelectAll();
 
-    const filter = wrapper.querySelector('[data-region="tool_quizbulkedit-filter"]');
-    const noMatch = wrapper.querySelector('[data-region="tool_quizbulkedit-nomatch"]');
+    const filter = wrapper.querySelector('[data-region="tool_bass-filter"]');
+    const noMatch = wrapper.querySelector('[data-region="tool_bass-nomatch"]');
     if (filter) {
         const applyFilter = () => {
             const text = filter.value.trim().toLowerCase();
             let anyShown = false;
-            wrapper.querySelectorAll('[data-region="tool_quizbulkedit-quizrow"]').forEach(row => {
+            wrapper.querySelectorAll('[data-region="tool_bass-row"]').forEach(row => {
                 row.hidden = text !== '' && !(row.dataset.name || '').toLowerCase().includes(text);
                 anyShown = anyShown || !row.hidden;
             });
@@ -100,11 +100,11 @@ const initTable = wrapper => {
  * @param {string} formid its id.
  */
 const initStale = (form, formid) => {
-    const preview = form.querySelector('[data-region="tool_quizbulkedit-preview"]');
+    const preview = form.querySelector('[data-region="tool_bass-preview"]');
     if (!preview) {
         return;
     }
-    const stalebar = preview.querySelector('[data-region="tool_quizbulkedit-stale"]');
+    const stalebar = preview.querySelector('[data-region="tool_bass-stale"]');
     // The bar sits inside an always-present live region; its text is added only
     // when the preview goes stale, so screen readers announce the change.
     const staletext = stalebar ? stalebar.textContent.trim() : '';
@@ -113,7 +113,7 @@ const initStale = (form, formid) => {
     }
 
     /**
-     * The watched controls: the form's own elements plus the quiz checkboxes that submit with it.
+     * The watched controls: the form's own elements plus the activity checkboxes that submit with it.
      *
      * @returns {HTMLElement[]}
      */
@@ -186,12 +186,12 @@ const initStale = (form, formid) => {
 };
 
 /**
- * Initialise the quiz table and the settings form's preview.
+ * Initialise the activity table and the settings form's preview.
  *
  * @param {string} formid the id of the settings form.
  */
 export const init = formid => {
-    const wrapper = document.querySelector('[data-region="tool_quizbulkedit-quiztable"][data-formid="' + formid + '"]');
+    const wrapper = document.querySelector('[data-region="tool_bass-table"][data-formid="' + formid + '"]');
     if (wrapper) {
         initTable(wrapper);
     }

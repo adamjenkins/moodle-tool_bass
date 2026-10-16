@@ -15,9 +15,9 @@
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Event observer registrations for tool_quizbulkedit.
+ * Event observer registrations for tool_bass.
  *
- * @package    tool_quizbulkedit
+ * @package    tool_bass
  * @copyright  2026 Adam Jenkins <adam@wisecat.net>
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
@@ -27,6 +27,6 @@ defined('MOODLE_INTERNAL') || die();
 $observers = [
     [
         'eventname' => \core\event\course_deleted::class,
-        'callback' => '\tool_quizbulkedit\observer::course_deleted',
+        'callback' => '\tool_bass\observer::course_deleted',
     ],
 ];

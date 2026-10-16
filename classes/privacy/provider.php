@@ -14,16 +14,17 @@
 // You should have received a copy of the GNU General Public License
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
-namespace tool_quizbulkedit\privacy;
+namespace tool_bass\privacy;
 
 /**
- * Privacy provider for tool_quizbulkedit.
+ * Privacy provider for tool_bass.
  *
- * The plugin has no tables of its own: it only changes quiz settings, grade
- * items and course module completion settings that belong to core, so it
- * stores no personal data and implements the null_provider.
+ * The plugin changes activity settings that belong to core and to the activity
+ * modules. Its own table holds named configurations of settings per course or
+ * site-wide, with no user id or other personal data, so it stores no personal
+ * data and implements the null_provider.
  *
- * @package    tool_quizbulkedit
+ * @package    tool_bass
  * @copyright  2026 Adam Jenkins <adam@wisecat.net>
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */

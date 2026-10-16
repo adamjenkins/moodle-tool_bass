@@ -1,0 +1,146 @@
+{{!
+    This file is part of Moodle - https://moodle.org/
+
+    Moodle is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    Moodle is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
+}}
+{{!
+    @template tool_bass/activitytable
+
+    The course's activities of the chosen type that the user may bulk edit, in course
+    order, each with a selection checkbox. The checkboxes sit outside the settings form
+    and carry form="formid" so they post with it as cmids[]. A Filter by name box hides
+    the rows whose name does not contain the typed text; the select-all checkbox acts on
+    the shown rows only.
+
+    Classes required for JS:
+    * none
+
+    Data attributes required for JS:
+    * data-region="tool_bass-table" with data-formid - the table wrapper
+    * data-region="tool_bass-filter" - the name filter box
+    * data-region="tool_bass-selectall" - the select-all checkbox
+    * data-region="tool_bass-row" with data-name - an activity's row (data-name is the plain-text name)
+    * data-region="tool_bass-select" - an activity's selection checkbox
+    * data-region="tool_bass-nomatch" - the row shown when the filter matches nothing
+
+    Context variables required for this template:
+    * formid string - the id of the settings form the checkboxes submit with
+    * hasrows bool - whether there are activities (shows the filter)
+    * showgrades bool - whether to show the Maximum grade and Grade to pass columns
+    * showcompletion bool - whether to show the Completion tracking column
+    * colcount int - number of columns, for the no-match row's colspan
+    * activities array - the activities, in course order
+      * cmid int - the course module id
+      * name string - the activity name, already formatted with format_string() (HTML)
+      * filtername string - the activity name as plain text, for the filter
+      * selectlabel string - the accessible name of the selection checkbox (plain text)
+      * url string|null - the activity's page
+      * section string - the section's name (plain text)
+      * selected bool - whether the activity is ticked
+      * maxgrade string - the formatted maximum grade, or -
+      * gradepass string - the formatted grade to pass, or -
+      * completion string - the completion tracking (when showcompletion)
+
+    Example context (json):
+    {
+        "formid": "tool_bass_settings",
+        "hasrows": true,
+        "showgrades": true,
+        "showcompletion": true,
+        "colcount": 6,
+        "activities": [
+            {
+                "cmid": 12,
+                "name": "Essay 1",
+                "filtername": "Essay 1",
+                "selectlabel": "Select Essay 1",
+                "url": "https://example.com/mod/assign/view.php?id=12",
+                "section": "Week 1",
+                "selected": true,
+                "maxgrade": "100.00",
+                "gradepass": "50.00",
+                "completion": "Add requirements"
+            },
+            {
+                "cmid": 13,
+                "name": "Essay 2",
+                "filtername": "Essay 2",
+                "selectlabel": "Select Essay 2",
+                "url": "https://example.com/mod/assign/view.php?id=13",
+                "section": "Week 2",
+                "selected": false,
+                "maxgrade": "20.00",
+                "gradepass": "0.00",
+                "completion": "None"
+            }
+        ]
+    }
+}}
+<div data-region="tool_bass-table" data-formid="{{formid}}" class="mb-4">
+    <h3>{{#str}}selectactivities, tool_bass{{/str}}</h3>
+    {{#hasrows}}
+    <div class="mb-2">
+        <label class="form-label" for="tool_bass_filter">{{#str}}filterbyname, tool_bass{{/str}}</label>
+        <input type="search" class="form-control w-auto" id="tool_bass_filter" data-region="tool_bass-filter"
+            autocomplete="off" aria-controls="tool_bass_table">
+    </div>
+    {{/hasrows}}
+    <div class="table-responsive">
+        <table class="table table-hover table-striped generaltable" id="tool_bass_table">
+            <thead>
+                <tr>
+                    <th scope="col">
+                        <input type="checkbox" class="form-check-input" id="tool_bass_selectall"
+                            data-region="tool_bass-selectall" title="{{#str}}selectallshown, tool_bass{{/str}}">
+                        <label class="visually-hidden" for="tool_bass_selectall">{{#str}}selectallshown, tool_bass{{/str}}</label>
+                    </th>
+                    <th scope="col">{{#str}}name{{/str}}</th>
+                    <th scope="col">{{#str}}section{{/str}}</th>
+                    {{#showgrades}}
+                    <th scope="col">{{#str}}maximumgrade{{/str}}</th>
+                    <th scope="col">{{#str}}gradepass, grades{{/str}}</th>
+                    {{/showgrades}}
+                    {{#showcompletion}}
+                    <th scope="col">{{#str}}completion, completion{{/str}}</th>
+                    {{/showcompletion}}
+                </tr>
+            </thead>
+            <tbody>
+                {{#hasrows}}
+                <tr data-region="tool_bass-nomatch" hidden>
+                    <td colspan="{{colcount}}">{{#str}}nofiltermatch, tool_bass{{/str}}</td>
+                </tr>
+                {{/hasrows}}
+                {{#activities}}
+                <tr data-region="tool_bass-row" data-name="{{filtername}}">
+                    <td>
+                        <input type="checkbox" class="form-check-input" name="cmids[]" value="{{cmid}}" form="{{formid}}"
+                            id="tool_bass_cm_{{cmid}}" data-region="tool_bass-select"{{#selected}} checked{{/selected}}>
+                        <label class="visually-hidden" for="tool_bass_cm_{{cmid}}">{{selectlabel}}</label>
+                    </td>
+                    <td>{{#url}}<a href="{{url}}">{{{name}}}</a>{{/url}}{{^url}}{{{name}}}{{/url}}</td>
+                    <td>{{section}}</td>
+                    {{#showgrades}}
+                    <td>{{maxgrade}}</td>
+                    <td>{{gradepass}}</td>
+                    {{/showgrades}}
+                    {{#showcompletion}}
+                    <td>{{completion}}</td>
+                    {{/showcompletion}}
+                </tr>
+                {{/activities}}
+            </tbody>
+        </table>
+    </div>
+</div>

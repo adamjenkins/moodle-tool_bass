@@ -15,13 +15,15 @@
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Bulk edit the settings of a course's quizzes (design spec section 8).
+ * Bulk edit the settings of a course's activities of one type.
  *
- * Preview plans the ticked settings for the ticked quizzes and shows what would change;
- * Apply changes plans again, refuses when anything changed since the preview (the
- * fingerprint), applies, and redirects back with a summary (POST-redirect-GET).
+ * Choose an activity type; the page lists the course's activities of that type and that
+ * type's own settings form, with a Change box per setting. Preview plans the ticked settings
+ * for the ticked activities and shows what would change; Apply changes plans again, refuses
+ * when anything changed since the preview (the fingerprint), saves each activity through its
+ * own edit form, and redirects back with a summary (POST-redirect-GET).
  *
- * @package    tool_quizbulkedit
+ * @package    tool_bass
  * @copyright  2026 Adam Jenkins <adam@wisecat.net>
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
@@ -30,121 +32,159 @@ require(__DIR__ . '/../../../config.php');
 require_once($CFG->libdir . '/completionlib.php');
 
 use core\output\notification;
-use tool_quizbulkedit\form\settings_form;
-use tool_quizbulkedit\local\applier;
-use tool_quizbulkedit\local\apply_result;
-use tool_quizbulkedit\local\change_request;
-use tool_quizbulkedit\local\planner;
-use tool_quizbulkedit\local\quiz_lister;
-use tool_quizbulkedit\local\saved_configs;
-use tool_quizbulkedit\output\preview;
-use tool_quizbulkedit\output\quiztable;
+use tool_bass\local\activity_lister;
+use tool_bass\local\applier;
+use tool_bass\local\apply_result;
+use tool_bass\local\bulk_form;
+use tool_bass\local\change_request;
+use tool_bass\local\planner;
+use tool_bass\local\saved_configs;
+use tool_bass\output\activitytable;
+use tool_bass\output\preview;
 
 $courseid = required_param('courseid', PARAM_INT);
+$modname = optional_param('modname', '', PARAM_PLUGIN);
 $course = get_course($courseid);
 
 require_login($course);
 $context = context_course::instance($courseid);
-require_capability('tool/quizbulkedit:manage', $context);
+require_capability('tool/bass:manage', $context);
 
-$url = new moodle_url('/admin/tool/quizbulkedit/index.php', ['courseid' => $courseid]);
-$PAGE->set_url($url);
+$baseurl = new moodle_url('/admin/tool/bass/index.php', ['courseid' => $courseid]);
+$PAGE->set_url($modname !== '' ? new moodle_url($baseurl, ['modname' => $modname]) : $baseurl);
 $PAGE->set_context($context);
 $PAGE->set_pagelayout('admin');
-$PAGE->set_title(get_string('pluginname', 'tool_quizbulkedit'));
+$PAGE->set_title(get_string('pluginname', 'tool_bass'));
 $PAGE->set_heading($course->fullname);
-navigation_node::override_active_url($url);
+navigation_node::override_active_url($baseurl);
 
 // Delete a saved configuration of the course: ask first, then delete on the confirmed, sesskey'd request.
 $deleteid = optional_param('deleteconfig', 0, PARAM_INT);
 if ($deleteid) {
     $config = saved_configs::get($courseid, $deleteid);
+    $back = new moodle_url($baseurl, ['modname' => $config->modname]);
     if (optional_param('confirm', 0, PARAM_BOOL)) {
         require_sesskey();
         saved_configs::delete($courseid, $deleteid);
-        redirect($url, get_string('configdeleted', 'tool_quizbulkedit', s($config->name)), null, notification::NOTIFY_SUCCESS);
+        redirect($back, get_string('configdeleted', 'tool_bass', s($config->name)), null, notification::NOTIFY_SUCCESS);
     }
     echo $OUTPUT->header();
-    echo $OUTPUT->heading(get_string('savedconfigs', 'tool_quizbulkedit'));
+    echo $OUTPUT->heading(get_string('savedconfigs', 'tool_bass'));
     echo $OUTPUT->confirm(
-        get_string('deleteconfigconfirm', 'tool_quizbulkedit', s($config->name)),
-        new moodle_url($url, ['deleteconfig' => $deleteid, 'confirm' => 1, 'sesskey' => sesskey()]),
-        $url
+        get_string('deleteconfigconfirm', 'tool_bass', s($config->name)),
+        new moodle_url($baseurl, ['deleteconfig' => $deleteid, 'confirm' => 1, 'sesskey' => sesskey()]),
+        $back
     );
     echo $OUTPUT->footer();
     exit;
 }
 
-// Every request re-derives the quizzes this user may edit; posted ids are only ever filtered through it.
-$eligible = quiz_lister::get_eligible($courseid);
-if (!$eligible) {
+// The activity types this user may bulk edit here; a posted type is only ever used through this list.
+$types = activity_lister::get_types($courseid);
+if (!isset($types[$modname])) {
+    $modname = '';
+}
+$typemenu = [];
+foreach ($types as $type => $info) {
+    $typemenu[$type] = get_string('typewithcount', 'tool_bass', (object) ['name' => $info['name'], 'count' => $info['count']]);
+}
+$picker = new single_select($baseurl, 'modname', $typemenu, $modname, ['' => 'choosedots'], 'tool_bass_type');
+$picker->set_label(get_string('activitytype', 'tool_bass'));
+
+if ($modname === '') {
     echo $OUTPUT->header();
-    echo $OUTPUT->heading(get_string('pluginname', 'tool_quizbulkedit'));
-    echo $OUTPUT->notification(get_string('noquizzes', 'tool_quizbulkedit'), notification::NOTIFY_INFO);
+    echo $OUTPUT->heading(get_string('pluginname', 'tool_bass'));
+    echo html_writer::tag('p', s(get_string('intro', 'tool_bass')));
+    if ($types) {
+        echo $OUTPUT->render($picker);
+        echo html_writer::tag('p', s(get_string('choosetype', 'tool_bass')), ['class' => 'mt-3']);
+    } else {
+        echo $OUTPUT->notification(get_string('noactivities', 'tool_bass'), notification::NOTIFY_INFO);
+    }
     echo $OUTPUT->footer();
     exit;
 }
 
-$showcompletion = (bool) (new completion_info($course))->is_enabled();
-$formdata = ['courseid' => $courseid, 'showcompletion' => $showcompletion];
-$mform = new settings_form($url, $formdata);
+$url = new moodle_url($baseurl, ['modname' => $modname]);
+$PAGE->set_url($url);
+// Every request re-derives the activities this user may edit; posted ids are only ever filtered through it.
+$eligible = activity_lister::get_eligible($courseid, $modname);
 
+$submitted = (bool) optional_param(bulk_form::MARKER, 0, PARAM_BOOL);
+$post = null;
+if ($submitted) {
+    require_sesskey();
+    $post = (array) data_submitted();
+}
 $postedcmids = optional_param_array('cmids', [], PARAM_INT);
-$selected = quiz_lister::filter_cmids($postedcmids, $eligible);
 
 // Load a course configuration or an admin preset (a sesskey'd link): it only fills the form.
 $loadid = optional_param('loadconfig', 0, PARAM_INT);
 $loadpresetid = optional_param('loadpreset', 0, PARAM_INT);
-if (($loadid || $loadpresetid) && !$mform->is_submitted()) {
+if (($loadid || $loadpresetid) && !$submitted) {
     require_sesskey();
     $config = $loadid ? saved_configs::get($courseid, $loadid) : saved_configs::get(saved_configs::PRESETS, $loadpresetid);
-    $snapshot = saved_configs::decode($config);
-    $mform->set_data((object) ($snapshot['fields'] + ['configname' => $loadid ? $config->name : '']));
-    if ($loadid) {
-        $selected = quiz_lister::filter_cmids($snapshot['cmids'], $eligible);
+    if ($config->modname !== $modname) {
+        throw new moodle_exception('error_configtype', 'tool_bass');
     }
-    \core\notification::info(get_string($loadid ? 'configloaded' : 'presetloaded', 'tool_quizbulkedit', s($config->name)));
+    // Only to read which settings the type offers: its JavaScript must not reach the page.
+    $template = \tool_bass\local\module_form::without_page_js(fn() => bulk_form::for_first($eligible, $url, null));
+    if ($template) {
+        [$post, $configcmids] = saved_configs::to_post($config, $template);
+        if ($loadid) {
+            $postedcmids = $configcmids;
+        }
+        \core\notification::info(get_string($loadid ? 'configloaded' : 'presetloaded', 'tool_bass', s($config->name)));
+    }
 }
 
-$displayform = $mform;
-$data = $mform->get_data();
-if ($data && optional_param('saveconfig', '', PARAM_RAW) !== '') {
-    // Save configuration: the form's settings and the ticked quizzes; nothing is written to any quiz.
-    $name = saved_configs::clean_name((string) $data->configname);
-    $replaced = saved_configs::save($courseid, $name, saved_configs::snapshot($data, $selected));
-    $saved = $DB->get_record(saved_configs::TABLE, ['courseid' => $courseid, 'name' => $name], 'id', MUST_EXIST);
-    redirect(
-        new moodle_url($url, ['loadconfig' => $saved->id, 'sesskey' => sesskey()]),
-        get_string($replaced ? 'configreplaced' : 'configsaved', 'tool_quizbulkedit', s($name)),
-        null,
-        notification::NOTIFY_SUCCESS
-    );
-} else if ($data) {
-    // The form has checked the sesskey and validated every ticked setting.
-    $request = change_request::from_form_data($data);
-    if (!$selected) {
-        \core\notification::error(get_string('error_noquizzes', 'tool_quizbulkedit'));
+$form = $eligible ? bulk_form::for_first($eligible, $url, $post) : null;
+$selected = activity_lister::filter_cmids($postedcmids, $eligible);
+$canpreset = has_capability('moodle/site:config', context_system::instance());
+
+$previewdata = null;
+if ($form && $submitted) {
+    $request = change_request::from_form($form);
+    if (optional_param('saveconfig', '', PARAM_RAW) !== '') {
+        // Save configuration: the ticked settings and activities; nothing is written to any activity.
+        $name = saved_configs::clean_name(optional_param('configname', '', PARAM_TEXT));
+        $aspreset = $canpreset && optional_param('aspreset', 0, PARAM_BOOL);
+        if ($name === '') {
+            $form->set_error('configname', get_string('error_configname', 'tool_bass'));
+        } else if ($request->is_empty()) {
+            \core\notification::error(get_string('error_nosettings', 'tool_bass'));
+        } else {
+            $owner = $aspreset ? saved_configs::PRESETS : $courseid;
+            $replaced = saved_configs::exists($owner, $modname, $name);
+            $id = saved_configs::save($owner, $modname, $name, saved_configs::snapshot($request, $aspreset ? [] : $selected));
+            $strings = $aspreset ? ['presetreplaced', 'presetsaved'] : ['configreplaced', 'configsaved'];
+            redirect(
+                new moodle_url($url, [$aspreset ? 'loadpreset' : 'loadconfig' => $id, 'sesskey' => sesskey()]),
+                get_string($replaced ? $strings[0] : $strings[1], 'tool_bass', s($name)),
+                null,
+                notification::NOTIFY_SUCCESS
+            );
+        }
+    } else if (!$selected) {
+        \core\notification::error(get_string('error_noactivities', 'tool_bass'));
     } else if ($request->is_empty()) {
-        \core\notification::error(get_string('error_nosettings', 'tool_quizbulkedit'));
+        \core\notification::error(get_string('error_nosettings', 'tool_bass'));
     } else {
         $planner = new planner();
-        $plans = $planner->plan($courseid, $postedcmids, $request);
-        $fingerprint = planner::fingerprint_plans($request, $plans);
+        $plans = $planner->plan($courseid, $postedcmids, $request, $form);
+        $fingerprint = planner::fingerprint($request, $plans);
         $preview = new preview($plans);
         if ($planner->get_rejected_cmids()) {
-            \core\notification::warning(get_string('rejectedcmids', 'tool_quizbulkedit', count($planner->get_rejected_cmids())));
+            \core\notification::warning(get_string('rejectedcmids', 'tool_bass', count($planner->get_rejected_cmids())));
         }
 
-        // Apply changes, the fingerprint and the confirmation are only in the form once a
-        // preview is shown, so they are read here (the sesskey was checked above).
         // The button is read with PARAM_RAW: PARAM_INT would clean its label to 0.
-        $applying = optional_param('apply', '', PARAM_RAW) !== '';
-        if ($applying) {
+        if (optional_param('apply', '', PARAM_RAW) !== '') {
             $postedfingerprint = optional_param('fingerprint', '', PARAM_ALPHANUM);
             if (!hash_equals($fingerprint, $postedfingerprint)) {
-                \core\notification::warning(get_string('previewchanged', 'tool_quizbulkedit'));
+                \core\notification::warning(get_string('previewchanged', 'tool_bass'));
             } else if ($preview->needs_confirmation() && !optional_param('confirmreset', 0, PARAM_BOOL)) {
-                \core\notification::error(get_string('error_confirmreset', 'tool_quizbulkedit'));
+                \core\notification::error(get_string('error_confirmreset', 'tool_bass'));
             } else {
                 $results = (new applier())->apply($courseid, $plans);
                 $counts = [
@@ -155,23 +195,18 @@ if ($data && optional_param('saveconfig', '', PARAM_RAW) !== '') {
                 ];
                 foreach ($results as $result) {
                     $counts[$result->status]++;
-                    if ($result->status === apply_result::APPLIED && !$result->messages) {
+                    if ($result->status === apply_result::APPLIED || $result->status === apply_result::NOCHANGE) {
                         continue;
                     }
-                    if ($result->status === apply_result::NOCHANGE) {
-                        continue;
-                    }
-                    [$name] = quiztable::quiz_name($eligible[$result->cmid]->cm);
+                    [$name] = activitytable::activity_name($eligible[$result->cmid]->cm);
                     $a = (object) ['name' => $name, 'messages' => s(implode(' ', $result->messages))];
                     if ($result->status === apply_result::FAILED) {
-                        \core\notification::error(get_string('resultfailed', 'tool_quizbulkedit', $a));
-                    } else if ($result->status === apply_result::SKIPPED) {
-                        \core\notification::warning(get_string('resultskipped', 'tool_quizbulkedit', $a));
+                        \core\notification::error(get_string('resultfailed', 'tool_bass', $a));
                     } else {
-                        \core\notification::warning(get_string('resultappliedwithmessages', 'tool_quizbulkedit', $a));
+                        \core\notification::warning(get_string('resultskipped', 'tool_bass', $a));
                     }
                 }
-                $summary = get_string('resultsummary', 'tool_quizbulkedit', (object) $counts);
+                $summary = get_string('resultsummary', 'tool_bass', (object) $counts);
                 $type = notification::NOTIFY_SUCCESS;
                 if ($counts[apply_result::FAILED] || $counts[apply_result::SKIPPED]) {
                     $type = notification::NOTIFY_WARNING;
@@ -181,42 +216,60 @@ if ($data && optional_param('saveconfig', '', PARAM_RAW) !== '') {
                 redirect($url, $summary, null, $type);
             }
         }
-
-        $displayform = new settings_form($url, $formdata + [
-            'previewhtml' => $OUTPUT->render_from_template('tool_quizbulkedit/preview', $preview->export_for_template($OUTPUT)),
-            'canapply' => $preview->can_apply(),
-            'needsconfirm' => $preview->needs_confirmation(),
-            'fingerprint' => $fingerprint,
-        ]);
+        $previewdata = [$preview, $fingerprint];
     }
 }
 
-$PAGE->requires->js_call_amd('tool_quizbulkedit/quiztable', 'init', [settings_form::FORM_ID]);
-
 echo $OUTPUT->header();
-echo $OUTPUT->heading(get_string('pluginname', 'tool_quizbulkedit'));
-echo html_writer::tag('p', s(get_string('intro', 'tool_quizbulkedit')));
-$table = new quiztable($eligible, $selected, $showcompletion, settings_form::FORM_ID);
-echo $OUTPUT->render_from_template('tool_quizbulkedit/quiztable', $table->export_for_template($OUTPUT));
-$configlist = function (int $owner, string $param, bool $deletable) use ($url): array {
+echo $OUTPUT->heading(get_string('pluginname', 'tool_bass'));
+echo html_writer::tag('p', s(get_string('intro', 'tool_bass')));
+echo $OUTPUT->render($picker);
+
+if (!$eligible || !$form) {
+    echo $OUTPUT->notification(get_string($eligible ? 'error_typeform' : 'noactivities', 'tool_bass'), notification::NOTIFY_INFO);
+    echo $OUTPUT->footer();
+    exit;
+}
+
+$showcompletion = (bool) (new completion_info($course))->is_enabled();
+$table = new activitytable($eligible, $selected, $showcompletion, bulk_form::FORM_ID);
+echo $OUTPUT->render_from_template('tool_bass/activitytable', $table->export_for_template($OUTPUT));
+
+$configlist = function (int $owner, string $param, bool $deletable) use ($url, $baseurl, $modname): array {
     $configs = [];
-    foreach (saved_configs::list($owner) as $config) {
+    foreach (saved_configs::list($owner, $modname) as $config) {
         $configs[] = [
             'name' => $config->name,
             'timemodified' => userdate($config->timemodified, get_string('strftimedatetimeshort', 'core_langconfig')),
             'loadurl' => (new moodle_url($url, [$param => $config->id, 'sesskey' => sesskey()]))->out(false),
-            'deleteurl' => $deletable ? (new moodle_url($url, ['deleteconfig' => $config->id]))->out(false) : null,
+            'deleteurl' => $deletable ? (new moodle_url($baseurl, ['deleteconfig' => $config->id]))->out(false) : null,
         ];
     }
     return $configs;
 };
 $courseconfigs = $configlist($courseid, 'loadconfig', true);
 $presets = $configlist(saved_configs::PRESETS, 'loadpreset', false);
-echo $OUTPUT->render_from_template('tool_quizbulkedit/savedconfigs', [
+echo $OUTPUT->render_from_template('tool_bass/savedconfigs', [
     'configs' => $courseconfigs,
     'hasconfigs' => (bool) $courseconfigs,
     'presets' => $presets,
     'haspresets' => (bool) $presets,
 ]);
-$displayform->display();
+
+[$representativename] = activitytable::activity_name($form->get_representative());
+echo html_writer::tag('h3', s(get_string('settingsheading', 'tool_bass')));
+echo html_writer::tag('p', get_string('representative', 'tool_bass', $representativename));
+
+if ($previewdata) {
+    [$preview, $fingerprint] = $previewdata;
+    $form->add_preview(
+        $OUTPUT->render_from_template('tool_bass/preview', $preview->export_for_template($OUTPUT)),
+        $preview->needs_confirmation(),
+        $fingerprint
+    );
+}
+$form->add_buttons($previewdata && $previewdata[0]->can_apply(), $canpreset);
+
+$PAGE->requires->js_call_amd('tool_bass/activitytable', 'init', [bulk_form::FORM_ID]);
+echo $form->render();
 echo $OUTPUT->footer();

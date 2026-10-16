@@ -14,120 +14,89 @@
 // You should have received a copy of the GNU General Public License
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
+namespace tool_bass\local;
+
+use PHPUnit\Framework\Attributes\CoversClass;
+
+defined('MOODLE_INTERNAL') || die();
+
+global $CFG;
+require_once(__DIR__ . '/../test_helper_trait.php');
+
 /**
- * Tests for saved configurations and admin presets.
+ * Saved configurations and admin presets.
  *
- * @package    tool_quizbulkedit
+ * @package    tool_bass
  * @category   test
  * @copyright  2026 Adam Jenkins <adam@wisecat.net>
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
-
-namespace tool_quizbulkedit\local;
-
-use PHPUnit\Framework\Attributes\CoversClass;
-
-/**
- * Tests for saved configurations and admin presets.
- */
 #[CoversClass(saved_configs::class)]
-#[CoversClass(\tool_quizbulkedit\observer::class)]
+#[CoversClass(\tool_bass\observer::class)]
 final class saved_configs_test extends \advanced_testcase {
-    /**
-     * A snapshot keeps the known form fields and the quizzes, and round-trips through save/get/decode
-     * into data a change_request accepts.
-     */
-    public function test_snapshot_round_trip(): void {
-        $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
-        $formdata = (object) [
-            'change_gradepass' => 1, 'gradepasstype' => 'percent', 'gradepass' => '60',
-            'change_review_marks' => 1, 'review_marks_during' => 0, 'review_marks_immediately' => 1,
-            'review_marks_open' => 0, 'review_marks_closed' => 1,
-            'change_timelimit' => 1, 'timelimit' => 1800,
-            'change_maxgrade' => 0, 'maxgrade' => '10',
-            'notafield' => 'dropped', 'sesskey' => 'dropped',
-        ];
-        $this->assertFalse(saved_configs::save($course->id, 'Mid-term', saved_configs::snapshot($formdata, [5, 5, 7])));
-        $record = saved_configs::get($course->id, (int) array_key_first(saved_configs::list($course->id)));
-        $snapshot = saved_configs::decode($record);
-
-        $this->assertSame([5, 7], $snapshot['cmids']);
-        $this->assertArrayNotHasKey('notafield', $snapshot['fields']);
-        $this->assertArrayNotHasKey('sesskey', $snapshot['fields']);
-        $this->assertSame('60', $snapshot['fields']['gradepass']);
-        $this->assertSame(1800, $snapshot['fields']['timelimit']);
-
-        $request = change_request::from_form_data((object) $snapshot['fields']);
-        $this->assertSame(['gradepass', 'review_marks', 'timelimit'], $request->get_changed_keys());
-        $this->assertSame('percent', $request->get_gradepass_type());
-    }
+    use \tool_bass\test_helper_trait;
 
     /**
-     * Saving under an existing name replaces it; presets (courseid 0) and courses are separate.
+     * Save, list per type, load back into the form (dropping unknown settings), replace and delete.
      */
-    public function test_replace_and_scope(): void {
+    public function test_save_and_load(): void {
+        global $DB;
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
-        $other = $this->getDataGenerator()->create_course();
-        saved_configs::save($course->id, 'Same', saved_configs::snapshot((object) ['change_attempts' => 1, 'attempts' => 1]));
-        $this->assertTrue(saved_configs::save($course->id, 'Same', saved_configs::snapshot((object) [
-            'change_attempts' => 1, 'attempts' => 3,
-        ])));
-        saved_configs::save(saved_configs::PRESETS, 'Same', saved_configs::snapshot((object) []));
+        $this->setAdminUser();
+        $course = $this->create_bass_course();
+        $a1 = $this->getDataGenerator()->create_module('assign', ['course' => $course->id]);
+        $cm = $this->bass_cm((int) $a1->cmid);
+        $this->set_bass_page($course, 'assign');
+        $form = $this->bass_form(
+            $cm,
+            ['maxattempts' => '4', 'gradepass' => '60'],
+            ['maxattempts', 'gradepass'],
+            [bulk_form::GRADEPASSTYPE => bulk_form::GRADEPASS_PERCENT]
+        );
+        $request = change_request::from_form($form);
+        $this->assertEqualsCanonicalizing(['gradepass', 'maxattempts'], $request->ticked);
 
-        $this->assertCount(1, saved_configs::list($course->id));
-        $this->assertCount(1, saved_configs::list(saved_configs::PRESETS));
-        $this->assertCount(0, saved_configs::list($other->id));
-        $id = (int) array_key_first(saved_configs::list($course->id));
-        $this->assertSame(3, saved_configs::decode(saved_configs::get($course->id, $id))['fields']['attempts']);
+        $id = saved_configs::save((int) $course->id, 'assign', 'Exams', saved_configs::snapshot($request, [(int) $cm->id]));
+        $this->assertTrue(saved_configs::exists((int) $course->id, 'assign', 'Exams'));
+        $this->assertCount(1, saved_configs::list((int) $course->id, 'assign'));
+        $this->assertCount(0, saved_configs::list((int) $course->id, 'quiz'));
+        $this->assertSame($id, saved_configs::save((int) $course->id, 'assign', 'Exams', saved_configs::snapshot($request)));
 
-        // A course's configuration cannot be reached through another course or as a preset.
+        // A stored setting the form does not offer (any more) is dropped on loading.
+        $record = saved_configs::get((int) $course->id, $id);
+        $data = json_decode($record->data, true);
+        $data['ticked'][] = 'nosuchsetting';
+        $data['values']['nosuchsetting'] = 'x';
+        $data['cmids'] = [(int) $cm->id, 'junk'];
+        $DB->set_field(saved_configs::TABLE, 'data', json_encode($data), ['id' => $id]);
+        [$post, $cmids] = saved_configs::to_post(saved_configs::get((int) $course->id, $id), $form);
+        $this->assertSame([(int) $cm->id], $cmids);
+        $this->assertArrayNotHasKey('nosuchsetting', $post);
+        $this->assertEquals(['maxattempts' => 1, 'gradepass' => 1], $post[bulk_form::CHANGE]);
+        $this->assertSame('4', $post['maxattempts']);
+        $this->assertSame(bulk_form::GRADEPASS_PERCENT, $post[bulk_form::GRADEPASSTYPE]);
+
+        // Loading it into the bulk form gives the same request.
+        $loaded = new bulk_form($cm, $this->bass_url($course, 'assign'), $post);
+        $this->assertSame($request->describe(), change_request::from_form($loaded)->describe());
+
         $this->expectException(\dml_missing_record_exception::class);
-        saved_configs::get($other->id, $id);
+        saved_configs::get(saved_configs::PRESETS, $id);
     }
 
     /**
-     * Editing a preset by id renames it, replacing any other preset of the new name.
-     */
-    public function test_rename_by_id(): void {
-        $this->resetAfterTest();
-        saved_configs::save(saved_configs::PRESETS, 'A', saved_configs::snapshot((object) []));
-        saved_configs::save(saved_configs::PRESETS, 'B', saved_configs::snapshot((object) []));
-        $ids = array_keys(saved_configs::list(saved_configs::PRESETS));
-        saved_configs::save(saved_configs::PRESETS, 'B', saved_configs::snapshot((object) []), (int) $ids[0]);
-        $presets = saved_configs::list(saved_configs::PRESETS);
-        $this->assertSame(['B'], array_values(array_map(fn($p) => $p->name, $presets)));
-        $this->assertSame((int) $ids[0], (int) array_key_first($presets));
-    }
-
-    /**
-     * Deleting a course deletes its configurations, not other courses' or the presets.
+     * A course's configurations are deleted with the course; presets stay.
      */
     public function test_course_deleted(): void {
+        global $DB;
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
-        $other = $this->getDataGenerator()->create_course();
-        saved_configs::save($course->id, 'X', saved_configs::snapshot((object) []));
-        saved_configs::save($other->id, 'X', saved_configs::snapshot((object) []));
-        saved_configs::save(saved_configs::PRESETS, 'X', saved_configs::snapshot((object) []));
-        delete_course($course, false);
-        $this->assertCount(0, saved_configs::list($course->id));
-        $this->assertCount(1, saved_configs::list($other->id));
-        $this->assertCount(1, saved_configs::list(saved_configs::PRESETS));
-    }
-
-    /**
-     * A tampered snapshot keeps only known scalar fields and integer cmids.
-     */
-    public function test_decode_tampered(): void {
-        $record = (object) ['data' => json_encode([
-            'fields' => ['attempts' => ['x'], 'change_attempts' => 1, 'evil' => '<script>', 'gradepass' => str_repeat('9', 500)],
-            'cmids' => [3, '4', 'x', ['y'], -2],
-        ])];
-        $snapshot = saved_configs::decode($record);
-        $this->assertEquals(['change_attempts' => 1, 'gradepass' => str_repeat('9', saved_configs::MAXVALUE)], $snapshot['fields']);
-        $this->assertSame([3, 4], $snapshot['cmids']);
-        $this->assertSame(['fields' => [], 'cmids' => []], saved_configs::decode((object) ['data' => 'not json']));
+        $course = $this->create_bass_course();
+        $snapshot = ['version' => saved_configs::VERSION, 'ticked' => [], 'values' => [], 'cmids' => []];
+        saved_configs::save((int) $course->id, 'quiz', 'Mine', $snapshot);
+        saved_configs::save(saved_configs::PRESETS, 'quiz', 'Site', $snapshot);
+        // Synchronously: Moodle 5.3 deletes courses asynchronously by default.
+        delete_course($course, false, false);
+        $this->assertFalse($DB->record_exists(saved_configs::TABLE, ['courseid' => $course->id]));
+        $this->assertTrue($DB->record_exists(saved_configs::TABLE, ['courseid' => saved_configs::PRESETS]));
     }
 }

@@ -1,6 +1,41 @@
 # Changelog
 
-All notable changes to `tool_quizbulkedit` are documented in this file.
+All notable changes to `tool_bass` are documented in this file. Versions before
+0.1.0 are those of `tool_quizbulkedit`, the quiz-only plugin it replaces.
+
+## [0.1.0] - 2026-10-16
+
+### Changed
+
+- Renamed and generalised: component `tool_bass` (was `tool_quizbulkedit`), path
+  `admin/tool/bass`, capability `tool/bass:manage` (`RISK_DATALOSS | RISK_CONFIG`),
+  table `tool_bass_config` with a `modname` column and the unique index
+  `(courseid, modname, name)`. No data is migrated from `tool_quizbulkedit`.
+- The settings form is the activity type's own mod form
+  (`local\bulk_form`), built for the first eligible activity and decorated: per-
+  activity content removed, a `bass_change[<element>]` box per setting with
+  `disabledIf`, dependencies on removed elements pruned, the grade to pass type
+  and the quiz maximum grade added.
+- Each activity is saved through its own mod form (`local\module_form`): the
+  form is rendered with the activity's current data and read back as a browser
+  posts it, the ticked settings are overlaid in POST shape, and the result is
+  posted to a fresh form whose `get_data()` validates it before
+  `update_moduleinfo()` saves it. The hand-written quiz catalogue, planner rules
+  and applier steps are gone.
+- Activities whose grade item is locked are skipped entirely.
+- Admin presets are saved from a course page ("Save as an admin preset");
+  `presets.php` lists and deletes them.
+
+### Added
+
+- Any activity type with a settings form that is shown on the course page
+  (`local\activity_lister::get_types()`), with an activity type menu.
+- Quiz Safe Exam Browser settings, including a site template.
+- PHPUnit: a save with nothing changed keeps every stored setting for 16 core
+  activity types; Safe Exam Browser template on several quizzes; grade to pass
+  as a percentage; quiz maximum grade; per-activity validation; locked grade
+  items; completion reset; fingerprint; saved configurations.
+- `pix/icon.svg`.
 
 ## [0.1.2] - 2026-10-04
 

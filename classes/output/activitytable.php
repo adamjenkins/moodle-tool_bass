@@ -14,31 +14,29 @@
 // You should have received a copy of the GNU General Public License
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
-namespace tool_quizbulkedit\output;
-
-use tool_quizbulkedit\local\settings_catalogue;
+namespace tool_bass\output;
 
 /**
- * The table of the course's quizzes the user may bulk edit, with a selection checkbox per quiz.
+ * The table of the course's activities of one type the user may bulk edit, with a selection checkbox each.
  *
- * Template: tool_quizbulkedit/quiztable. The checkboxes sit outside the settings form and
+ * Template: tool_bass/activitytable. The checkboxes sit outside the settings form and
  * carry form="<formid>" so they post with it as cmids[].
  *
- * @package    tool_quizbulkedit
+ * @package    tool_bass
  * @copyright  2026 Adam Jenkins <adam@wisecat.net>
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
-class quiztable implements \renderable, \templatable {
+class activitytable implements \renderable, \templatable {
     /**
      * Constructor.
      *
-     * @param array $eligible the result of {@see \tool_quizbulkedit\local\quiz_lister::get_eligible()}
+     * @param array $eligible the result of {@see \tool_bass\local\activity_lister::get_eligible()}
      * @param int[] $selected the course module ids to show ticked (already filtered to eligible ones)
      * @param bool $showcompletion whether to show the Completion tracking column
      * @param string $formid the id of the form the checkboxes submit with
      */
     public function __construct(
-        /** @var array cmid => quiz_lister entry */
+        /** @var array cmid => activity_lister entry */
         protected array $eligible,
         /** @var int[] ticked course module ids */
         protected array $selected,
@@ -50,14 +48,31 @@ class quiztable implements \renderable, \templatable {
     }
 
     /**
-     * The quiz name as HTML (format_string()) and as plain text (for the name filter).
+     * The activity name as HTML (format_string()) and as plain text (for the name filter).
      *
      * @param \cm_info $cm
      * @return string[] [html, text]
      */
-    public static function quiz_name(\cm_info $cm): array {
+    public static function activity_name(\cm_info $cm): array {
         $html = format_string($cm->name, true, ['context' => $cm->context]);
         return [$html, html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8')];
+    }
+
+    /**
+     * A completion tracking value as text.
+     *
+     * @param int $completion
+     * @return string
+     */
+    protected static function completion_text(int $completion): string {
+        switch ($completion) {
+            case COMPLETION_TRACKING_MANUAL:
+                return get_string('completion_manual', 'completion');
+            case COMPLETION_TRACKING_AUTOMATIC:
+                return get_string('completion_automatic', 'completion');
+            default:
+                return get_string('completion_none', 'completion');
+        }
     }
 
     /**
@@ -68,30 +83,33 @@ class quiztable implements \renderable, \templatable {
      */
     public function export_for_template(\renderer_base $output): array {
         $selected = array_flip(array_map('intval', $this->selected));
-        $quizzes = [];
+        $activities = [];
+        $graded = false;
+        foreach ($this->eligible as $entry) {
+            $graded = $graded || $entry->gradepass !== null;
+        }
         foreach ($this->eligible as $cmid => $entry) {
-            [$namehtml, $nametext] = self::quiz_name($entry->cm);
-            $decimals = (int) $entry->quiz->decimalpoints;
-            $quizzes[] = [
+            [$namehtml, $nametext] = self::activity_name($entry->cm);
+            $activities[] = [
                 'cmid' => (int) $cmid,
                 'name' => $namehtml,
                 'filtername' => $nametext,
-                'selectlabel' => get_string('selectquiz', 'tool_quizbulkedit', $nametext),
-                'url' => (new \moodle_url('/mod/quiz/view.php', ['id' => $cmid]))->out(false),
+                'selectlabel' => get_string('selectactivity', 'tool_bass', $nametext),
+                'url' => $entry->cm->url ? $entry->cm->url->out(false) : null,
+                'section' => $entry->section,
                 'selected' => isset($selected[(int) $cmid]),
-                'maxgrade' => settings_catalogue::format_value('maxgrade', $entry->quiz->grade, $decimals),
-                'gradepass' => settings_catalogue::format_value('gradepass', $entry->gradepass, $decimals),
-                'attempts' => settings_catalogue::format_value('attempts', $entry->quiz->attempts),
-                'completion' => $this->showcompletion
-                    ? settings_catalogue::format_value('completion', $entry->cmrecord->completion) : '',
+                'maxgrade' => $entry->grademax !== null ? format_float($entry->grademax, $entry->decimals) : '-',
+                'gradepass' => $entry->gradepass !== null ? format_float($entry->gradepass, $entry->decimals) : '-',
+                'completion' => $this->showcompletion ? self::completion_text((int) $entry->cm->completion) : '',
             ];
         }
         return [
             'formid' => $this->formid,
-            'hasrows' => !empty($quizzes),
+            'hasrows' => !empty($activities),
+            'showgrades' => $graded,
             'showcompletion' => $this->showcompletion,
-            'colcount' => $this->showcompletion ? 6 : 5,
-            'quizzes' => $quizzes,
+            'colcount' => 3 + ($graded ? 2 : 0) + ($this->showcompletion ? 1 : 0),
+            'activities' => $activities,
         ];
     }
 }

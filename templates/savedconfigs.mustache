@@ -15,10 +15,11 @@
     along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 }}
 {{!
-    @template tool_quizbulkedit/savedconfigs
+    @template tool_bass/savedconfigs
 
-    The course's saved configurations (Load, Delete) and the site's admin presets (Load).
-    Loading only fills the settings form; nothing is written to any quiz.
+    The course's saved configurations of the chosen activity type (Load, Delete) and the
+    site's admin presets of that type (Load). Loading only fills the settings form;
+    nothing is written to any activity.
 
     Classes required for JS:
     * none
@@ -40,22 +41,22 @@
     {
         "hasconfigs": true,
         "configs": [
-            {"name": "Mid-term review options", "timemodified": "3/10/26, 09:15", "loadurl": "#", "deleteurl": "#"}
+            {"name": "Exam review options", "timemodified": "3/10/26, 09:15", "loadurl": "#", "deleteurl": "#"}
         ],
         "haspresets": true,
         "presets": [
-            {"name": "Department standard", "timemodified": "1/10/26, 12:00", "loadurl": "#"}
+            {"name": "Department exam setup", "timemodified": "1/10/26, 12:00", "loadurl": "#"}
         ]
     }
 }}
-<div class="mb-3" data-region="tool_quizbulkedit-savedconfigs">
-    <h3 class="h5">{{#str}}savedconfigs, tool_quizbulkedit{{/str}}</h3>
+<div class="mb-3" data-region="tool_bass-savedconfigs">
+    <h3 class="h5">{{#str}}savedconfigs, tool_bass{{/str}}</h3>
     {{#hasconfigs}}
         <table class="table table-sm generaltable w-auto">
             <thead>
                 <tr>
-                    <th scope="col">{{#str}}configname, tool_quizbulkedit{{/str}}</th>
-                    <th scope="col">{{#str}}configsavedon, tool_quizbulkedit{{/str}}</th>
+                    <th scope="col">{{#str}}configname, tool_bass{{/str}}</th>
+                    <th scope="col">{{#str}}configsavedon, tool_bass{{/str}}</th>
                     <th scope="col"><span class="visually-hidden">{{#str}}actions{{/str}}</span></th>
                 </tr>
             </thead>
@@ -66,7 +67,7 @@
                         <td>{{timemodified}}</td>
                         <td class="text-nowrap">
                             <a class="btn btn-secondary btn-sm" href="{{loadurl}}">
-                                {{#str}}load, tool_quizbulkedit{{/str}}<span class="visually-hidden"> {{name}}</span>
+                                {{#str}}load, tool_bass{{/str}}<span class="visually-hidden"> {{name}}</span>
                             </a>
                             <a class="btn btn-outline-danger btn-sm ms-1" href="{{deleteurl}}">
                                 {{#str}}delete{{/str}}<span class="visually-hidden"> {{name}}</span>
@@ -78,15 +79,15 @@
         </table>
     {{/hasconfigs}}
     {{^hasconfigs}}
-        <p class="text-muted">{{#str}}nosavedconfigs, tool_quizbulkedit{{/str}}</p>
+        <p class="text-muted">{{#str}}nosavedconfigs, tool_bass{{/str}}</p>
     {{/hasconfigs}}
     {{#haspresets}}
-        <h3 class="h5">{{#str}}adminpresets, tool_quizbulkedit{{/str}}</h3>
+        <h3 class="h5">{{#str}}adminpresets, tool_bass{{/str}}</h3>
         <table class="table table-sm generaltable w-auto">
             <thead>
                 <tr>
-                    <th scope="col">{{#str}}presetname, tool_quizbulkedit{{/str}}</th>
-                    <th scope="col">{{#str}}configsavedon, tool_quizbulkedit{{/str}}</th>
+                    <th scope="col">{{#str}}presetname, tool_bass{{/str}}</th>
+                    <th scope="col">{{#str}}configsavedon, tool_bass{{/str}}</th>
                     <th scope="col"><span class="visually-hidden">{{#str}}actions{{/str}}</span></th>
                 </tr>
             </thead>
@@ -97,7 +98,7 @@
                         <td>{{timemodified}}</td>
                         <td>
                             <a class="btn btn-secondary btn-sm" href="{{loadurl}}">
-                                {{#str}}load, tool_quizbulkedit{{/str}}<span class="visually-hidden"> {{name}}</span>
+                                {{#str}}load, tool_bass{{/str}}<span class="visually-hidden"> {{name}}</span>
                             </a>
                         </td>
                     </tr>

@@ -15,18 +15,18 @@
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Plugin version metadata for tool_quizbulkedit.
+ * Plugin version metadata for tool_bass.
  *
- * @package    tool_quizbulkedit
+ * @package    tool_bass
  * @copyright  2026 Adam Jenkins <adam@wisecat.net>
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->component = 'tool_quizbulkedit';
-$plugin->version   = 2026100401;
+$plugin->component = 'tool_bass';
+$plugin->version   = 2026101600;
 $plugin->requires  = 2026042000; // Moodle 5.2.
 $plugin->supported = [502, 503];
 $plugin->maturity  = MATURITY_BETA;
-$plugin->release   = '0.1.2';
+$plugin->release   = '0.1.0';

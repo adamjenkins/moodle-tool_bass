@@ -14,100 +14,56 @@
 // You should have received a copy of the GNU General Public License
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
-namespace tool_quizbulkedit\local;
-
-use mod_quiz\question\display_options;
+namespace tool_bass\local;
 
 /**
- * Works out, per selected quiz, what a change request would change (design spec section 6).
+ * Plans a change request for the selected activities.
  *
- * Rules are checked on the FINAL values: the requested value where a setting is
- * changed, the quiz's current value otherwise. Only the settings in the request
- * get a final value, so a setting the teacher did not tick is never written —
- * in particular, the review-option rules only ever adjust the review rows that
- * are themselves in the request (a row that is not in the request keeps its
- * stored bitmask, even if the rules would have cleared bits of it; at run time
- * core already ignores those bits, see display_options::make_from_quiz()).
- * A validation rule runs only when one of the settings it involves is changed,
- * so a quiz's existing state never blocks an unrelated change.
+ * Per activity: read its current settings from its own edit form
+ * ({@see module_form::current_post()}), replace the ticked settings, work out the grade to
+ * pass from a percentage and the quiz maximum grade, read the form again as a browser would
+ * post it with those values ({@see module_form::browser_post()}), compare old and new values,
+ * and, when something changes, post the result to the activity's edit form to run the form's
+ * own validation — so the preview reports exactly what Save on the edit page would refuse.
+ * Nothing is written.
  *
- * @package    tool_quizbulkedit
+ * @package    tool_bass
  * @copyright  2026 Adam Jenkins <adam@wisecat.net>
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 class planner {
-    /** @var string[] behaviours with which the grade to pass may exceed the maximum grade (mod_form.php:621). */
-    protected const CBM_BEHAVIOURS = ['deferredcbm', 'immediatecbm'];
+    /** @var float the largest grade the grade columns (NUMBER(10,5)) can hold. */
+    public const GRADE_LIMIT = 99999.99999;
 
-    /** @var string[] review rows hidden at a later time when the attempt row is off then (mod_form.php:427-432). */
-    protected const ATTEMPT_DEPENDENT_FIELDS = ['correctness', 'specificfeedback', 'generalfeedback', 'rightanswer'];
-
-    /** @var string[] keys whose change touches the grade item, so a locked grade item blocks them. */
-    protected const GRADEITEM_KEYS = ['maxgrade', 'grademethod', 'review_marks', 'review_maxmarks'];
-
-    /** @var int[] posted course module ids that were not eligible in the last plan() call. */
+    /** @var int[] posted ids that were not eligible. */
     protected array $rejected = [];
 
     /**
-     * Plan a change request for the selected quizzes of a course.
-     *
-     * Course module ids are re-derived from the eligible list ({@see quiz_lister}); any
-     * id that is not eligible is dropped and reported by {@see get_rejected_cmids()}.
+     * Plan the request for the selected activities.
      *
      * @param int $courseid
-     * @param int[] $cmids selected course module ids (client-supplied, untrusted)
+     * @param int[] $cmids client-supplied course module ids (filtered here)
      * @param change_request $request
-     * @return quiz_plan[] cmid => plan, in course order
+     * @param bulk_form $form the bulk form of the request's activity type
+     * @return activity_plan[] cmid => plan, in course order
      */
-    public function plan(int $courseid, array $cmids, change_request $request): array {
-        global $CFG, $DB;
-        require_once($CFG->dirroot . '/mod/quiz/lib.php');
-        require_once($CFG->dirroot . '/mod/quiz/locallib.php');
-        require_once($CFG->dirroot . '/question/engine/lib.php');
+    public function plan(int $courseid, array $cmids, change_request $request, bulk_form $form): array {
+        global $CFG;
         require_once($CFG->libdir . '/completionlib.php');
 
-        $eligible = quiz_lister::get_eligible($courseid);
-        $selected = quiz_lister::filter_cmids($cmids, $eligible);
-        $posted = array_unique(array_map('intval', $cmids));
-        $this->rejected = array_values(array_diff($posted, $selected));
-        if (!$selected) {
-            return [];
-        }
-
-        // Batch per-course facts: one query each, not one per quiz.
-        $quizids = array_map(fn($cmid) => (int) $eligible[$cmid]->quiz->id, $selected);
-        [$insql, $params] = $DB->get_in_or_equal($quizids, SQL_PARAMS_NAMED, 'qid');
-        $withattempts = $DB->get_fieldset_sql(
-            "SELECT DISTINCT quiz FROM {quiz_attempts} WHERE preview = 0 AND quiz $insql",
-            $params
-        );
-        $withattempts = array_flip(array_map('intval', $withattempts));
-        [$insql, $params] = $DB->get_in_or_equal($selected, SQL_PARAMS_NAMED, 'cmid');
-        $withcompletion = $DB->get_fieldset_sql(
-            "SELECT DISTINCT coursemoduleid FROM {course_modules_completion} WHERE coursemoduleid $insql",
-            $params
-        );
-        $withcompletion = array_flip(array_map('intval', $withcompletion));
-
-        $course = get_course($courseid);
-        $completionenabled = (bool) (new \completion_info($course))->is_enabled();
+        $eligible = activity_lister::get_eligible($courseid, $request->modname);
+        $selected = activity_lister::filter_cmids($cmids, $eligible);
+        $this->rejected = array_values(array_diff(array_unique(array_map('intval', $cmids)), $selected));
 
         $plans = [];
         foreach ($selected as $cmid) {
-            $entry = $eligible[$cmid];
-            $plan = new quiz_plan(
-                $entry,
-                isset($withattempts[(int) $entry->quiz->id]),
-                isset($withcompletion[$cmid])
-            );
-            $this->plan_quiz($plan, $request, $completionenabled);
-            $plans[$cmid] = $plan;
+            $plans[$cmid] = $this->plan_activity($eligible[$cmid], $request, $form);
         }
         return $plans;
     }
 
     /**
-     * Posted course module ids the last {@see plan()} call dropped as not eligible.
+     * The posted ids that were dropped because they are not eligible.
      *
      * @return int[]
      */
@@ -116,255 +72,218 @@ class planner {
     }
 
     /**
-     * Fingerprint of a request and the current state of the selected quizzes.
+     * Plan one activity.
      *
-     * The preview carries it; applying recomputes it and refuses when it differs
-     * (the request, the selection or a quiz changed since the preview).
-     *
-     * @param int $courseid
-     * @param int[] $cmids
+     * @param \stdClass $entry an activity_lister entry
      * @param change_request $request
-     * @return string sha1
+     * @param bulk_form $form
+     * @return activity_plan
      */
-    public function fingerprint(int $courseid, array $cmids, change_request $request): string {
-        return self::fingerprint_plans($request, $this->plan($courseid, $cmids, $request));
-    }
+    protected function plan_activity(\stdClass $entry, change_request $request, bulk_form $form): activity_plan {
+        global $DB;
+        $cm = $entry->cm;
+        $plan = new activity_plan($cm);
+        $settings = $form->get_settings();
 
-    /**
-     * Fingerprint of a request and already computed plans (see {@see fingerprint()}).
-     *
-     * @param change_request $request
-     * @param quiz_plan[] $plans
-     * @return string sha1
-     */
-    public static function fingerprint_plans(change_request $request, array $plans): string {
-        $quizzes = [];
-        foreach ($plans as $plan) {
-            $quizzes[$plan->get_cmid()] = $plan->get_snapshot();
+        if ($entry->gradelocked) {
+            // Saving through the module would print the gradebook's "regrade anyway" page.
+            $plan->add_error(get_string('error_gradelocked', 'tool_bass'));
+            return $plan;
         }
-        ksort($quizzes);
-        return sha1(json_encode(['request' => $request->to_array(), 'quizzes' => $quizzes]));
-    }
 
-    /**
-     * Plan one quiz.
-     *
-     * @param quiz_plan $plan
-     * @param change_request $request
-     * @param bool $completionenabled whether completion is enabled for the site and course
-     */
-    protected function plan_quiz(quiz_plan $plan, change_request $request, bool $completionenabled): void {
-        // Plain settings: final = requested.
-        foreach ($request->get_changed_keys() as $key) {
-            if ($key === 'gradepass' || settings_catalogue::is_review_key($key)) {
+        try {
+            $current = module_form::current_post($cm);
+        } catch (\Throwable $e) {
+            $plan->add_error(get_string('error_form', 'tool_bass', $e->getMessage()));
+            return $plan;
+        }
+
+        $merged = $current;
+        $currentvalues = [];
+        foreach ($request->ticked as $name) {
+            if ($name === bulk_form::MAXGRADE || !isset($settings[$name])) {
                 continue;
             }
-            if (settings_catalogue::is_completion_key($key) && !$completionenabled) {
-                continue;
+            $merged = post_values::overlay($merged, $settings[$name]['roots'], $request->values);
+            $currentvalues[$name] = post_values::subset($current, $settings[$name]['roots']);
+        }
+
+        // Quiz maximum grade (not in the quiz form: applied with the grade calculator, see applier).
+        $isquiz = $cm->modname === 'quiz';
+        $oldmax = $isquiz ? (float) $DB->get_field('quiz', 'grade', ['id' => $cm->instance]) : null;
+        $newmax = null;
+        if ($isquiz && $request->is_ticked(bulk_form::MAXGRADE)) {
+            $newmax = self::parse_grade($request->values[bulk_form::MAXGRADE] ?? '');
+            if ($newmax === null || $newmax <= 0) {
+                $plan->add_error(get_string('error_maxgrade', 'tool_bass'));
+                return $plan;
             }
-            $plan->set_final($key, $request->get($key));
-        }
-
-        $this->plan_grades($plan, $request);
-        if ($request->has_review_changes()) {
-            $this->plan_review($plan, $request);
-        }
-        $this->check_graceperiod($plan, $request);
-        $this->check_completion($plan, $request, $completionenabled);
-
-        if ($plan->is_gradeitem_locked()) {
-            foreach (self::GRADEITEM_KEYS as $key) {
-                if ($plan->is_changing($key)) {
-                    $plan->add_error('gradeitemlocked', get_string('error_gradeitemlocked', 'tool_quizbulkedit'));
-                    break;
+            $currentvalues[bulk_form::MAXGRADE] = $oldmax;
+            if (abs($newmax - $oldmax) > 1e-7) {
+                $plan->set_maxgrade($newmax);
+                // The quiz form validates the grade to pass against its hidden grade field.
+                $merged['grade'] = (string) $newmax;
+                $plan->add_row(
+                    bulk_form::MAXGRADE,
+                    $settings[bulk_form::MAXGRADE]['label'],
+                    format_float($oldmax, $entry->decimals, true, true),
+                    format_float($newmax, $entry->decimals, true, true)
+                );
+                if ($DB->record_exists('quiz_attempts', ['quiz' => $cm->instance, 'preview' => 0])) {
+                    $plan->add_warning(get_string('warning_rescale', 'tool_bass'));
                 }
             }
         }
-    }
 
-    /**
-     * Maximum grade and grade to pass.
-     *
-     * @param quiz_plan $plan
-     * @param change_request $request
-     */
-    protected function plan_grades(quiz_plan $plan, change_request $request): void {
-        $newmax = (float) $plan->get_final('maxgrade');
-        $decimals = (int) $plan->get_final('decimalpoints');
+        // Grade to pass as a percentage of this activity's (new) maximum grade.
+        if ($request->is_ticked('gradepass') && $request->gradepasstype === bulk_form::GRADEPASS_PERCENT) {
+            $percent = self::parse_grade($request->values['gradepass'] ?? '');
+            $max = $isquiz ? ($newmax ?? $oldmax) : $this->new_point_grade($request, $merged, $entry);
+            if ($percent === null || $percent < 0 || $percent > 100) {
+                $plan->add_error(get_string('error_percent', 'tool_bass'));
+                return $plan;
+            }
+            if ($max === null || $max <= 0) {
+                $plan->add_error(get_string('error_percentnograde', 'tool_bass'));
+                return $plan;
+            }
+            $merged['gradepass'] = format_float(round($percent * $max / 100, 5), 5, true, true);
+        }
 
-        if ($request->is_changed('gradepass')) {
-            if ($plan->get_current('gradepass') === null) {
-                $plan->add_error('nogradeitem', get_string('error_nogradeitem', 'tool_quizbulkedit'));
-            } else {
-                $value = (float) $request->get('gradepass');
-                if ($request->get_gradepass_type() === settings_catalogue::GRADEPASS_PERCENT) {
-                    $value = round($newmax * $value / 100, $decimals);
-                }
-                $plan->set_final('gradepass', $value);
+        $completion = false;
+        foreach ($request->ticked as $name) {
+            if (!empty($settings[$name]['completion'])) {
+                $completion = true;
             }
         }
-
-        $finalgradepass = $plan->get_final('gradepass');
-        if (
-            $finalgradepass !== null
-            && ($request->is_changed('maxgrade') || $request->is_changed('gradepass')
-                || $request->is_changed('preferredbehaviour'))
-            && !in_array($plan->get_final('preferredbehaviour'), self::CBM_BEHAVIOURS, true)
-            && $finalgradepass - $newmax > \mod_quiz\grade_calculator::ALMOST_ZERO
-        ) {
-            $plan->add_error('gradepassabovemax', get_string('error_gradepassabovemax', 'tool_quizbulkedit', (object) [
-                'gradepass' => format_float($finalgradepass, $decimals),
-                'max' => format_float($newmax, $decimals),
-            ]));
+        if ($completion) {
+            // As the edit page's "Unlock completion settings": the module saves the completion
+            // settings and recalculates everyone's completion of this activity.
+            $merged['completionunlocked'] = 1;
         }
 
-        if ($plan->is_changing('maxgrade') && $plan->has_attempts()) {
-            $plan->add_warning('warnattemptsrescale', get_string('warnattemptsrescale', 'tool_quizbulkedit'));
+        // What the browser would post once the teacher put these values into the edit form: the
+        // form's own show/hide and enable/disable rules decide which fields go with them.
+        try {
+            $merged = module_form::browser_post($cm, $merged);
+        } catch (\Throwable $e) {
+            $plan->add_error(get_string('error_form', 'tool_bass', $e->getMessage()));
+            return $plan;
         }
-    }
 
-    /**
-     * Review options: apply core's form rules to the requested rows, on final values.
-     *
-     * Mirrors quiz_process_options() (attempt always shown during, overall feedback never
-     * during) and the disabledIf rules of mod_form.php (lines 240-252 and
-     * add_review_options_group()): a bit core's form would disable is saved as 0.
-     *
-     * @param quiz_plan $plan
-     * @param change_request $request
-     */
-    protected function plan_review(quiz_plan $plan, change_request $request): void {
-        $unused = \question_engine::get_behaviour_unused_display_options((string) $plan->get_final('preferredbehaviour'));
-        $quiz = $plan->get_quiz();
-        $adjusted = [];
-        $settingafterclose = false;
-
-        // REVIEW_FIELDS lists attempt and maxmarks before the rows that depend on them.
-        foreach (settings_catalogue::REVIEW_FIELDS as $field) {
-            $key = 'review_' . $field;
-            if (!$request->is_changed($key)) {
+        $completionchanged = false;
+        foreach ($request->ticked as $name) {
+            if ($name === bulk_form::MAXGRADE || !isset($settings[$name])) {
                 continue;
             }
-            $requested = (int) $request->get($key);
-            $bits = $requested;
+            $roots = $settings[$name]['roots'];
+            $old = post_values::subset($current, $roots);
+            $new = post_values::subset($merged, $roots);
+            if (post_values::same($old, $new)) {
+                continue;
+            }
+            $plan->add_row($name, $settings[$name]['label'], $form->display($name, $current), $form->display($name, $merged));
+            $completionchanged = $completionchanged || !empty($settings[$name]['completion']);
+        }
+        $plan->set_current($currentvalues);
+        $plan->set_post($merged);
 
-            if ($field === 'attempt') {
-                $bits |= display_options::DURING;
-            }
-            if ($field === 'overallfeedback') {
-                $bits &= ~display_options::DURING;
-            }
-            if (in_array($field, $unused, true)) {
-                $bits &= ~display_options::DURING;
-            }
-            if ($field === 'marks') {
-                $maxmarks = (int) $plan->get_final('review_maxmarks');
-                foreach (settings_catalogue::REVIEW_TIMES as $bit) {
-                    if (!($maxmarks & $bit)) {
-                        $bits &= ~$bit;
+        if (!$plan->has_changes()) {
+            return $plan;
+        }
+
+        if ($completionchanged && (new \completion_info($cm->get_course()))->count_user_data($cm) > 0) {
+            $plan->set_needs_confirmation(true);
+            $plan->add_warning(get_string('warning_completionreset', 'tool_bass'));
+        }
+
+        // Run the edit form's own validation on exactly what would be saved.
+        try {
+            $validate = function (\moodleform_mod $modform, $data) use ($request, $settings): array {
+                $errors = $data ? [] : module_form::errors($modform);
+                $quickform = module_form::quickform($modform);
+                foreach ($request->ticked as $name) {
+                    if ($name === bulk_form::MAXGRADE) {
+                        continue;
+                    }
+                    if (!$quickform->elementExists($name)) {
+                        $errors[$name] = get_string('error_notinform', 'tool_bass');
+                    } else if ($quickform->getElement($name)->isFrozen()) {
+                        $errors[$name] = get_string('error_frozen', 'tool_bass');
                     }
                 }
-            }
-            if (in_array($field, self::ATTEMPT_DEPENDENT_FIELDS, true)) {
-                $attempt = (int) $plan->get_final('review_attempt');
-                foreach (settings_catalogue::REVIEW_TIMES as $time => $bit) {
-                    if ($time !== 'during' && !($attempt & $bit)) {
-                        $bits &= ~$bit;
-                    }
+                $messages = [];
+                foreach ($errors as $name => $message) {
+                    $label = $settings[$name]['label'] ?? ($quickform->elementExists($name)
+                        ? bulk_form::label_of($quickform->getElement($name)) : $name);
+                    $messages[] = get_string('error_setting', 'tool_bass', (object) ['label' => $label, 'message' => $message]);
                 }
-            }
-
-            $plan->set_final($key, $bits);
-            if ($requested & ~$bits) {
-                $adjusted[] = settings_catalogue::get_label($key);
-            }
-            if (($bits & display_options::AFTER_CLOSE) && !((int) $plan->get_current($key) & display_options::AFTER_CLOSE)) {
-                $settingafterclose = true;
-            }
+                return $messages;
+            };
+            $errors = module_form::with_submission($cm, $merged, $validate);
+        } catch (\Throwable $e) {
+            $errors = [get_string('error_form', 'tool_bass', $e->getMessage())];
         }
-
-        if ($adjusted) {
-            $plan->add_note('notereviewadjusted', get_string('notereviewadjusted', 'tool_quizbulkedit', implode(', ', $adjusted)));
+        foreach ($errors as $message) {
+            $plan->add_error($message);
         }
-        if ($settingafterclose && empty($quiz->timeclose)) {
-            $plan->add_note('noteafterclose', get_string('noteafterclose', 'tool_quizbulkedit'));
-        }
+        return $plan;
     }
 
     /**
-     * Grace period must exceed the site minimum when overdue attempts get one (mod_form.php:554-558).
+     * The new maximum grade of an activity's grade setting, when it is (or stays) a point grade.
      *
-     * @param quiz_plan $plan
      * @param change_request $request
+     * @param array $merged the POST data to save
+     * @param \stdClass $entry an activity_lister entry
+     * @return float|null null for a scale or no grade
      */
-    protected function check_graceperiod(quiz_plan $plan, change_request $request): void {
-        if (!$request->is_changed('overduehandling') && !$request->is_changed('graceperiod')) {
-            return;
+    protected function new_point_grade(change_request $request, array $merged, \stdClass $entry): ?float {
+        if ($request->is_ticked('grade') && is_array($merged['grade'] ?? null)) {
+            if (($merged['grade']['modgrade_type'] ?? '') !== 'point') {
+                return null;
+            }
+            return self::parse_grade($merged['grade']['modgrade_point'] ?? '');
         }
-        if ($plan->get_final('overduehandling') !== 'graceperiod') {
-            return;
-        }
-        $graceperiodmin = (int) get_config('quiz', 'graceperiodmin');
-        if ((int) $plan->get_final('graceperiod') <= $graceperiodmin) {
-            $plan->add_error('graceperiodtoosmall', get_string('graceperiodtoosmall', 'quiz', format_time($graceperiodmin)));
-        }
+        return $entry->grademax;
     }
 
     /**
-     * Completion rules (core's quiz form and moodleform_mod validation).
+     * Parse a typed grade or percentage (localised decimal separator allowed).
      *
-     * @param quiz_plan $plan
-     * @param change_request $request
-     * @param bool $completionenabled
+     * @param mixed $value
+     * @return float|null null when it is not a number within the grade columns' range
      */
-    protected function check_completion(quiz_plan $plan, change_request $request, bool $completionenabled): void {
-        $completionchanged = $request->has_completion_changes();
-        if ($completionchanged && !$completionenabled) {
-            $plan->add_error('completiondisabled', get_string('error_completiondisabled', 'tool_quizbulkedit'));
-            return;
+    public static function parse_grade($value): ?float {
+        if (!is_scalar($value)) {
+            return null;
         }
-
-        $tracking = (int) $plan->get_final('completion');
-        $usegrade = (bool) $plan->get_final('completionusegrade');
-        $passgrade = (bool) $plan->get_final('completionpassgrade');
-        $exhausted = (bool) $plan->get_final('completionattemptsexhausted');
-        $minattempts = (int) $plan->get_final('completionminattempts');
-        $view = (bool) $plan->get_final('completionview');
-
-        if ($completionchanged) {
-            if ($passgrade && !$usegrade) {
-                $plan->add_error('passgradeneedsusegrade', get_string('error_passgradeneedsusegrade', 'tool_quizbulkedit'));
-            }
-            if ($exhausted && !$passgrade) {
-                $plan->add_error('exhaustedneedspassgrade', get_string('error_exhaustedneedspassgrade', 'tool_quizbulkedit'));
-            }
-            if (
-                $tracking === COMPLETION_TRACKING_AUTOMATIC
-                && !$view && !$usegrade && !$passgrade && !$exhausted && $minattempts <= 0
-            ) {
-                $plan->add_error('badautocompletion', get_string('badautocompletion', 'completion'));
-            }
+        $number = unformat_float(trim((string) $value), true);
+        if ($number === false || $number === null || !is_numeric($number)) {
+            return null;
         }
+        $number = (float) $number;
+        return abs($number) <= self::GRADE_LIMIT ? $number : null;
+    }
 
-        if (
-            ($completionchanged || $request->is_changed('gradepass'))
-            && $tracking === COMPLETION_TRACKING_AUTOMATIC && $passgrade
-        ) {
-            $gradepass = $plan->get_final('gradepass');
-            if ($gradepass === null || $gradepass <= 0) {
-                $plan->add_error('activitygradetopassnotset', get_string('activitygradetopassnotset', 'completion'));
-            }
+    /**
+     * A fingerprint of a request and its plans: Apply changes is refused when it differs from the preview's.
+     *
+     * @param change_request $request
+     * @param activity_plan[] $plans
+     * @return string
+     */
+    public static function fingerprint(change_request $request, array $plans): string {
+        $parts = [$request->describe()];
+        foreach ($plans as $cmid => $plan) {
+            $parts[] = [
+                'cmid' => (int) $cmid,
+                'current' => post_values::normalise($plan->get_current()),
+                'rows' => $plan->get_rows(),
+                'errors' => $plan->get_errors(),
+                'confirm' => $plan->needs_confirmation(),
+            ];
         }
-
-        if ($request->is_changed('completionminattempts') || $request->is_changed('attempts')) {
-            $attempts = (int) $plan->get_final('attempts');
-            if ($minattempts > 0 && $attempts > 0 && $minattempts > $attempts) {
-                $plan->add_error('completionminattemptserror', get_string('completionminattemptserror', 'quiz'));
-            }
-        }
-
-        if ($plan->needs_completion_reset() && $plan->has_completion_data()) {
-            $plan->add_warning('warncompletionreset', get_string('warncompletionreset', 'tool_quizbulkedit'));
-        }
+        return sha1(json_encode($parts));
     }
 }

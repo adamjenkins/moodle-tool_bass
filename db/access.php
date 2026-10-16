@@ -15,9 +15,9 @@
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Capability definitions for tool_quizbulkedit.
+ * Capability definitions for tool_bass.
  *
- * @package    tool_quizbulkedit
+ * @package    tool_bass
  * @copyright  2026 Adam Jenkins <adam@wisecat.net>
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
@@ -25,8 +25,8 @@
 defined('MOODLE_INTERNAL') || die();
 
 $capabilities = [
-    'tool/quizbulkedit:manage' => [
-        'riskbitmask' => RISK_DATALOSS, // Rescales quiz grades and resets activity completion.
+    'tool/bass:manage' => [
+        'riskbitmask' => RISK_DATALOSS | RISK_CONFIG, // Changes activity settings in bulk, rescales grades, resets completion.
         'captype' => 'write',
         'contextlevel' => CONTEXT_COURSE,
         'archetypes' => [

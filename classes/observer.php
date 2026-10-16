@@ -14,14 +14,14 @@
 // You should have received a copy of the GNU General Public License
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
-namespace tool_quizbulkedit;
+namespace tool_bass;
 
-use tool_quizbulkedit\local\saved_configs;
+use tool_bass\local\saved_configs;
 
 /**
- * Observer class handling core events for tool_quizbulkedit.
+ * Observer class handling core events for tool_bass.
  *
- * @package    tool_quizbulkedit
+ * @package    tool_bass
  * @copyright  2026 Adam Jenkins <adam@wisecat.net>
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */

@@ -14,12 +14,12 @@
 // You should have received a copy of the GNU General Public License
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
-namespace tool_quizbulkedit\local;
+namespace tool_bass\local;
 
 /**
- * The outcome of applying one quiz plan.
+ * The outcome of applying one activity plan.
  *
- * @package    tool_quizbulkedit
+ * @package    tool_bass
  * @copyright  2026 Adam Jenkins <adam@wisecat.net>
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
@@ -30,21 +30,21 @@ class apply_result {
     public const NOCHANGE = 'nochange';
     /** @var string the plan had errors, nothing was written. */
     public const SKIPPED = 'skipped';
-    /** @var string writing threw; everything for this quiz was rolled back. */
+    /** @var string writing threw; everything for this activity was rolled back. */
     public const FAILED = 'failed';
 
     /**
      * Constructor.
      *
-     * @param int $cmid the quiz's course module id
-     * @param string $name the quiz name (raw, format it for display)
+     * @param int $cmid the activity's course module id
+     * @param string $name the activity name (raw, format it for display)
      * @param string $status one of the constants
      * @param string[] $messages error messages (skipped: the plan's errors; failed: the exception message)
      */
     public function __construct(
-        /** @var int the quiz's course module id */
+        /** @var int the activity's course module id */
         public readonly int $cmid,
-        /** @var string the quiz name (raw) */
+        /** @var string the activity name (raw) */
         public readonly string $name,
         /** @var string one of the status constants */
         public readonly string $status,

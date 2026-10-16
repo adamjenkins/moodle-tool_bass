@@ -14,16 +14,16 @@
 // You should have received a copy of the GNU General Public License
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
-namespace tool_quizbulkedit\output;
+namespace tool_bass\output;
 
-use tool_quizbulkedit\local\quiz_plan;
+use tool_bass\local\activity_plan;
 
 /**
- * The preview of a change request: per selected quiz, what changes and why it may not.
+ * The preview of a change request: per selected activity, what changes and why it may not.
  *
- * Template: tool_quizbulkedit/preview.
+ * Template: tool_bass/preview.
  *
- * @package    tool_quizbulkedit
+ * @package    tool_bass
  * @copyright  2026 Adam Jenkins <adam@wisecat.net>
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
@@ -31,16 +31,16 @@ class preview implements \renderable, \templatable {
     /**
      * Constructor.
      *
-     * @param quiz_plan[] $plans from {@see \tool_quizbulkedit\local\planner::plan()}
+     * @param activity_plan[] $plans from {@see \tool_bass\local\planner::plan()}
      */
     public function __construct(
-        /** @var quiz_plan[] cmid => plan */
+        /** @var activity_plan[] cmid => plan */
         protected array $plans,
     ) {
     }
 
     /**
-     * Whether any quiz can be changed.
+     * Whether any activity can be changed.
      *
      * @return bool
      */
@@ -54,7 +54,7 @@ class preview implements \renderable, \templatable {
     }
 
     /**
-     * Whether applying would reset some quiz's completion data, so it needs the teacher's confirmation.
+     * Whether applying would reset some activity's completion data, so it needs the teacher's confirmation.
      *
      * @return bool
      */
@@ -70,7 +70,7 @@ class preview implements \renderable, \templatable {
     /**
      * Messages as template rows.
      *
-     * @param string[] $messages code => plain text message
+     * @param string[] $messages plain text messages
      * @return array[]
      */
     protected static function messages(array $messages): array {
@@ -84,7 +84,7 @@ class preview implements \renderable, \templatable {
      * @return array
      */
     public function export_for_template(\renderer_base $output): array {
-        $quizzes = [];
+        $activities = [];
         $counts = ['change' => 0, 'nochange' => 0, 'error' => 0];
         foreach ($this->plans as $cmid => $plan) {
             if ($plan->get_errors()) {
@@ -95,31 +95,30 @@ class preview implements \renderable, \templatable {
                 $status = 'nochange';
             }
             $counts[$status]++;
-            [$name] = quiztable::quiz_name($plan->get_cm());
-            $rows = $status === 'error' ? [] : $plan->get_diff_rows();
-            $quizzes[] = [
+            $cm = $plan->get_cm();
+            [$name] = activitytable::activity_name($cm);
+            $rows = $status === 'error' ? [] : $plan->get_rows();
+            $activities[] = [
                 'cmid' => (int) $cmid,
                 'name' => $name,
-                'url' => (new \moodle_url('/mod/quiz/view.php', ['id' => $cmid]))->out(false),
+                'url' => $cm->url ? $cm->url->out(false) : null,
                 'status' => $status,
-                'statustext' => get_string('status_' . $status, 'tool_quizbulkedit'),
+                'statustext' => get_string('status_' . $status, 'tool_bass'),
                 'iserror' => $status === 'error',
                 'ischange' => $status === 'change',
                 'hasrows' => !empty($rows),
                 'rows' => array_map(fn(array $row): array => [
-                    'key' => $row['key'],
                     'label' => $row['label'],
                     'old' => $row['old'],
                     'new' => $row['new'],
                 ], $rows),
                 'errors' => self::messages($plan->get_errors()),
                 'warnings' => self::messages($plan->get_warnings()),
-                'notes' => self::messages($plan->get_notes()),
             ];
         }
         return [
-            'summary' => get_string('previewsummary', 'tool_quizbulkedit', (object) $counts),
-            'quizzes' => $quizzes,
+            'summary' => get_string('previewsummary', 'tool_bass', (object) $counts),
+            'activities' => $activities,
             'canapply' => $this->can_apply(),
             'needsconfirm' => $this->needs_confirmation(),
         ];

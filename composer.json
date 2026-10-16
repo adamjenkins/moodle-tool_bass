@@ -1,6 +1,6 @@
 {
-    "name": "adamjenkins/moodle-tool_quizbulkedit",
-    "description": "A Moodle admin tool that changes the settings of some or all quizzes in a course in one go",
+    "name": "adamjenkins/moodle-tool_bass",
+    "description": "Bulk Activity Settings Selector: a Moodle admin tool that changes the settings of some or all activities of one type in a course in one go",
     "type": "moodle-tool",
     "require": {
         "moodle/moodle": "^5.2",

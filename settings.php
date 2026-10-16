@@ -17,7 +17,7 @@
 /**
  * Site administration: the admin presets page.
  *
- * @package    tool_quizbulkedit
+ * @package    tool_bass
  * @copyright  2026 Adam Jenkins <adam@wisecat.net>
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
@@ -26,9 +26,9 @@ defined('MOODLE_INTERNAL') || die();
 
 if ($hassiteconfig) {
     $ADMIN->add('tools', new admin_externalpage(
-        'tool_quizbulkedit_presets',
-        new lang_string('adminpresets', 'tool_quizbulkedit'),
-        new moodle_url('/admin/tool/quizbulkedit/presets.php'),
+        'tool_bass_presets',
+        new lang_string('adminpresets', 'tool_bass'),
+        new moodle_url('/admin/tool/bass/presets.php'),
         'moodle/site:config'
     ));
 }

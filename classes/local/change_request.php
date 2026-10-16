@@ -14,349 +14,111 @@
 // You should have received a copy of the GNU General Public License
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
-namespace tool_quizbulkedit\local;
+namespace tool_bass\local;
 
 /**
- * The settings a teacher asked to change: only the keys whose "Change" box was ticked.
+ * What the teacher asked for: the ticked settings of one activity type and their new values.
  *
- * Every key of {@see settings_catalogue::get_keys()} is individually settable. A key
- * that is not in the request is never planned or written.
+ * Values are kept in POST shape (the keys the settings' elements post), so that they can be
+ * posted to each activity's own edit form unchanged. Only settings the bulk form offers are
+ * kept; anything else in the request is ignored.
  *
- * Form-field contract (what {@see from_form_data()} and {@see validate_form_data()} read;
- * the settings form must use exactly these element names):
- *
- * - change_<key>: advcheckbox, 1 = change this setting, 0/absent = leave it alone. One per
- *   key: change_maxgrade, change_gradepass, change_attempts, change_grademethod,
- *   change_review_attempt ... change_review_overallfeedback (one per review row),
- *   change_shuffleanswers, change_preferredbehaviour, change_canredoquestions,
- *   change_navmethod, change_timelimit, change_overduehandling, change_graceperiod,
- *   change_decimalpoints, change_questiondecimalpoints, change_showuserpicture,
- *   change_showblocks, change_delay1, change_delay2, change_browsersecurity,
- *   change_completion, change_completionview, change_completionusegrade,
- *   change_completionpassgrade, change_completionattemptsexhausted,
- *   change_completionminattempts.
- * - Value fields, read only when the matching change_<key> is ticked:
- *   - maxgrade: float (> 0, at most settings_catalogue::GRADE_LIMIT).
- *   - gradepasstype: 'absolute' or 'percent'; gradepass: float (percent: 0-100; absolute: 0 or more).
- *   - review_<field>_during, review_<field>_immediately, review_<field>_open,
- *     review_<field>_closed: advcheckboxes 0/1, for each field of
- *     settings_catalogue::REVIEW_FIELDS (attempt, correctness, maxmarks, marks,
- *     specificfeedback, generalfeedback, rightanswer, overallfeedback).
- *   - <key> for every other key, holding a value of settings_catalogue::get_choices(<key>)
- *     for select and yes/no keys (attempts, grademethod, decimalpoints,
- *     questiondecimalpoints, preferredbehaviour, canredoquestions, shuffleanswers,
- *     navmethod, overduehandling, showuserpicture, showblocks, browsersecurity,
- *     completion, completionview, completionusegrade, completionpassgrade,
- *     completionattemptsexhausted), a number of seconds 0 or more for durations
- *     (timelimit, graceperiod, delay1, delay2: the value a 'duration' element returns),
- *     and an integer 0 or more for completionminattempts (0 = off).
- *
- * @package    tool_quizbulkedit
+ * @package    tool_bass
  * @copyright  2026 Adam Jenkins <adam@wisecat.net>
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 class change_request {
-    /** @var array key => normalised requested value, for the changed keys only (review keys: bitmask). */
-    protected array $values = [];
-
-    /** @var string|null grade to pass type (settings_catalogue::GRADEPASS_*), when gradepass is changed. */
-    protected ?string $gradepasstype = null;
-
     /**
-     * Use {@see from_form_data()} or {@see from_array()}.
+     * Constructor.
      *
-     * @param array $values key => normalised value
-     * @param string|null $gradepasstype
+     * @param string $modname the activity type
+     * @param string[] $ticked the ticked setting names, in form order
+     * @param array $values POST key => posted value, for the roots of the ticked settings
+     * @param string $gradepasstype bulk_form::GRADEPASS_ABSOLUTE or GRADEPASS_PERCENT
      */
-    protected function __construct(array $values, ?string $gradepasstype) {
-        $this->values = $values;
-        $this->gradepasstype = $gradepasstype;
+    public function __construct(
+        /** @var string the activity type */
+        public readonly string $modname,
+        /** @var string[] ticked setting names, in form order */
+        public readonly array $ticked,
+        /** @var array POST key => value for the ticked settings' roots */
+        public readonly array $values,
+        /** @var string how the grade to pass is given */
+        public readonly string $gradepasstype = bulk_form::GRADEPASS_ABSOLUTE,
+    ) {
     }
 
     /**
-     * Build a request from the settings form data (see the class docblock for the field names).
+     * The request posted with (or loaded into) the bulk form.
      *
-     * @param \stdClass $data form data, as returned by moodleform::get_data()
+     * @param bulk_form $form
      * @return self
-     * @throws \invalid_parameter_exception if a ticked setting has a missing or invalid value
      */
-    public static function from_form_data(\stdClass $data): self {
-        $data = (array) $data;
-        $errors = self::validate_form_data($data);
-        if ($errors) {
-            throw new \invalid_parameter_exception('Invalid quiz settings: ' . implode(', ', array_keys($errors)));
-        }
+    public static function from_form(bulk_form $form): self {
+        $submitted = $form->get_submitted();
+        $boxes = is_array($submitted[bulk_form::CHANGE] ?? null) ? $submitted[bulk_form::CHANGE] : [];
+        $ticked = [];
         $values = [];
-        $gradepasstype = null;
-        foreach (settings_catalogue::get_keys() as $key) {
-            if (empty($data['change_' . $key])) {
+        foreach ($form->get_settings() as $name => $setting) {
+            if (empty($boxes[$name])) {
                 continue;
             }
-            $type = settings_catalogue::get_type($key);
-            if ($type === settings_catalogue::TYPE_REVIEW) {
-                $bitmask = 0;
-                foreach (settings_catalogue::REVIEW_TIMES as $time => $bit) {
-                    if (!empty($data[$key . '_' . $time])) {
-                        $bitmask |= $bit;
-                    }
+            $ticked[] = $name;
+            foreach ($setting['roots'] as $root) {
+                if (array_key_exists($root, $submitted)) {
+                    $values[$root] = $submitted[$root];
                 }
-                $values[$key] = $bitmask;
-            } else if ($type === settings_catalogue::TYPE_GRADEPASS) {
-                $gradepasstype = (string) $data['gradepasstype'];
-                $values[$key] = self::to_float($data['gradepass']);
-            } else if ($type === settings_catalogue::TYPE_FLOAT) {
-                $values[$key] = self::to_float($data[$key]);
-            } else {
-                $values[$key] = settings_catalogue::normalise($key, $data[$key]);
             }
         }
-        return new self($values, $gradepasstype);
-    }
-
-    /**
-     * Build a request from a plain array (for tests and scripts).
-     *
-     * Keys are catalogue keys. Review keys take either an int bitmask or an array
-     * of time name => 0/1 (missing times = 0). gradepass takes
-     * ['type' => 'absolute'|'percent', 'value' => float].
-     *
-     * Example: ['maxgrade' => 20, 'gradepass' => ['type' => 'percent', 'value' => 50],
-     * 'review_marks' => ['immediately' => 1, 'closed' => 1], 'completion' => 2].
-     *
-     * @param array $changes key => value
-     * @return self
-     * @throws \invalid_parameter_exception on an unknown key or invalid value
-     */
-    public static function from_array(array $changes): self {
-        $data = [];
-        foreach ($changes as $key => $value) {
-            if (!settings_catalogue::is_key($key)) {
-                throw new \invalid_parameter_exception('Unknown quiz setting key: ' . $key);
-            }
-            $data['change_' . $key] = 1;
-            $type = settings_catalogue::get_type($key);
-            if ($type === settings_catalogue::TYPE_REVIEW) {
-                foreach (settings_catalogue::REVIEW_TIMES as $time => $bit) {
-                    $data[$key . '_' . $time] = is_array($value) ? (int) !empty($value[$time]) : (int) (bool) ($value & $bit);
-                }
-            } else if ($type === settings_catalogue::TYPE_GRADEPASS) {
-                if (!is_array($value) || !array_key_exists('type', $value) || !array_key_exists('value', $value)) {
-                    throw new \invalid_parameter_exception('gradepass needs [type, value]');
-                }
-                $data['gradepasstype'] = $value['type'];
-                $data['gradepass'] = $value['value'];
-            } else {
-                $data[$key] = $value;
-            }
+        $type = (string) ($submitted[bulk_form::GRADEPASSTYPE] ?? bulk_form::GRADEPASS_ABSOLUTE);
+        if ($type !== bulk_form::GRADEPASS_PERCENT) {
+            $type = bulk_form::GRADEPASS_ABSOLUTE;
         }
-        return self::from_form_data((object) $data);
+        return new self($form->get_modname(), $ticked, $values, $type);
     }
 
     /**
-     * Validate settings form data: for moodleform::validation() and {@see from_form_data()}.
-     *
-     * @param array $data submitted form data (see the class docblock for the field names)
-     * @return array form element name => error message; empty when valid
-     */
-    public static function validate_form_data(array $data): array {
-        $errors = [];
-        foreach (settings_catalogue::get_keys() as $key) {
-            if (empty($data['change_' . $key])) {
-                continue;
-            }
-            $type = settings_catalogue::get_type($key);
-            switch ($type) {
-                case settings_catalogue::TYPE_REVIEW:
-                    foreach (settings_catalogue::REVIEW_TIMES as $time => $notused) {
-                        $field = $key . '_' . $time;
-                        if (isset($data[$field]) && !in_array((string) $data[$field], ['0', '1', ''], true)) {
-                            $errors[$field] = get_string('error_invalidvalue', 'tool_quizbulkedit');
-                        }
-                    }
-                    break;
-                case settings_catalogue::TYPE_FLOAT:
-                    $value = self::to_float($data[$key] ?? null);
-                    if ($value === null || $value <= 0 || $value > settings_catalogue::GRADE_LIMIT) {
-                        $errors[$key] = get_string('error_maxgrade', 'tool_quizbulkedit');
-                    }
-                    break;
-                case settings_catalogue::TYPE_GRADEPASS:
-                    $gradepasstype = $data['gradepasstype'] ?? null;
-                    $value = self::to_float($data['gradepass'] ?? null);
-                    if ($gradepasstype === settings_catalogue::GRADEPASS_PERCENT) {
-                        if ($value === null || $value < 0 || $value > 100) {
-                            $errors['gradepass'] = get_string('error_gradepasspercent', 'tool_quizbulkedit');
-                        }
-                    } else if ($gradepasstype === settings_catalogue::GRADEPASS_ABSOLUTE) {
-                        if ($value === null || $value < 0 || $value > settings_catalogue::GRADE_LIMIT) {
-                            $errors['gradepass'] = get_string('error_gradepassabsolute', 'tool_quizbulkedit');
-                        }
-                    } else {
-                        $errors['gradepasstype'] = get_string('error_invalidvalue', 'tool_quizbulkedit');
-                    }
-                    break;
-                case settings_catalogue::TYPE_DURATION:
-                case settings_catalogue::TYPE_INT:
-                    if (!self::is_non_negative_int($data[$key] ?? null)) {
-                        $errors[$key] = get_string('error_notnegativeint', 'tool_quizbulkedit');
-                    }
-                    break;
-                case settings_catalogue::TYPE_SELECT:
-                case settings_catalogue::TYPE_YESNO:
-                    $value = $data[$key] ?? null;
-                    if (
-                        $value === null || !is_scalar($value)
-                        || !array_key_exists((string) $value, self::string_keys(settings_catalogue::get_choices($key)))
-                    ) {
-                        $errors[$key] = get_string('error_invalidvalue', 'tool_quizbulkedit');
-                    }
-                    break;
-            }
-        }
-        return $errors;
-    }
-
-    /**
-     * Re-key a choice list by string keys, so lookups do not depend on PHP's key casting.
-     *
-     * @param array $choices
-     * @return array
-     */
-    protected static function string_keys(array $choices): array {
-        $result = [];
-        foreach ($choices as $value => $label) {
-            $result[(string) $value] = $label;
-        }
-        return $result;
-    }
-
-    /**
-     * Whether a form value is a whole number of 0 or more (int, integral float or digit string).
-     *
-     * @param mixed $value
-     * @return bool
-     */
-    protected static function is_non_negative_int($value): bool {
-        if (is_int($value)) {
-            return $value >= 0;
-        }
-        if (is_float($value)) {
-            return is_finite($value) && $value >= 0 && floor($value) == $value && $value <= PHP_INT_MAX;
-        }
-        return is_string($value) && preg_match('/^\d{1,18}$/', $value) === 1;
-    }
-
-    /**
-     * Read a float from form data (already a float from a 'float' element, or a localised string).
-     *
-     * @param mixed $value
-     * @return float|null null when not a finite number
-     */
-    protected static function to_float($value): ?float {
-        if ($value === null || $value === '' || is_array($value) || is_object($value) || is_bool($value)) {
-            return null;
-        }
-        if (!is_float($value) && !is_int($value)) {
-            $value = unformat_float((string) $value, true);
-            if ($value === false || $value === null) {
-                return null;
-            }
-        }
-        $value = (float) $value;
-        return is_finite($value) ? $value : null;
-    }
-
-    /**
-     * Whether a setting was asked to change.
-     *
-     * @param string $key a catalogue key
-     * @return bool
-     */
-    public function is_changed(string $key): bool {
-        return array_key_exists($key, $this->values);
-    }
-
-    /**
-     * The requested value of a changed setting.
-     *
-     * @param string $key a catalogue key
-     * @return mixed normalised value (review keys: the requested bitmask before planner rules)
-     */
-    public function get(string $key) {
-        if (!$this->is_changed($key)) {
-            throw new \coding_exception('Quiz setting not in this request: ' . $key);
-        }
-        return $this->values[$key];
-    }
-
-    /**
-     * The keys asked to change, in catalogue order.
-     *
-     * @return string[]
-     */
-    public function get_changed_keys(): array {
-        return array_values(array_filter(settings_catalogue::get_keys(), fn($key) => $this->is_changed($key)));
-    }
-
-    /**
-     * Whether nothing was asked to change.
+     * Whether nothing is ticked.
      *
      * @return bool
      */
     public function is_empty(): bool {
-        return !$this->values;
+        return !$this->ticked;
     }
 
     /**
-     * The grade to pass type, when gradepass is changed.
+     * Whether a setting is ticked.
      *
-     * @return string|null settings_catalogue::GRADEPASS_ABSOLUTE or GRADEPASS_PERCENT
-     */
-    public function get_gradepass_type(): ?string {
-        return $this->gradepasstype;
-    }
-
-    /**
-     * Whether any review options row is changed.
-     *
+     * @param string $name
      * @return bool
      */
-    public function has_review_changes(): bool {
-        foreach (array_keys($this->values) as $key) {
-            if (settings_catalogue::is_review_key($key)) {
-                return true;
-            }
-        }
-        return false;
+    public function is_ticked(string $name): bool {
+        return in_array($name, $this->ticked, true);
     }
 
     /**
-     * Whether any completion setting is changed.
+     * The values to post again to re-create the request in the bulk form (saved configurations).
      *
-     * @return bool
+     * @return array POST shape: the values, the Change boxes and the grade to pass type
      */
-    public function has_completion_changes(): bool {
-        foreach (array_keys($this->values) as $key) {
-            if (settings_catalogue::is_completion_key($key)) {
-                return true;
-            }
-        }
-        return false;
+    public function to_post(): array {
+        $post = $this->values;
+        $post[bulk_form::CHANGE] = array_fill_keys($this->ticked, 1);
+        $post[bulk_form::GRADEPASSTYPE] = $this->gradepasstype;
+        return $post;
     }
 
     /**
-     * A canonical array form of the request (stable order), for fingerprints.
+     * A stable description of the request, for the preview's fingerprint.
      *
      * @return array
      */
-    public function to_array(): array {
-        $result = [];
-        foreach ($this->get_changed_keys() as $key) {
-            $result[$key] = $this->values[$key];
-        }
-        if ($this->gradepasstype !== null) {
-            $result['gradepasstype'] = $this->gradepasstype;
-        }
-        return $result;
+    public function describe(): array {
+        return [
+            'modname' => $this->modname,
+            'ticked' => $this->ticked,
+            'values' => post_values::normalise($this->values),
+            'gradepasstype' => $this->gradepasstype,
+        ];
     }
 }

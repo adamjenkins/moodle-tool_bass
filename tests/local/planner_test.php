@@ -14,503 +14,328 @@
 // You should have received a copy of the GNU General Public License
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
+namespace tool_bass\local;
+
+use PHPUnit\Framework\Attributes\CoversClass;
+use quizaccess_seb\seb_quiz_settings;
+use quizaccess_seb\settings_provider;
+
+defined('MOODLE_INTERNAL') || die();
+
+global $CFG;
+require_once(__DIR__ . '/../test_helper_trait.php');
+
 /**
- * Tests for the planner and quiz plans.
+ * Planning and applying change requests: the bulk form, the planner and the applier together.
  *
- * @package    tool_quizbulkedit
+ * @package    tool_bass
  * @category   test
  * @copyright  2026 Adam Jenkins <adam@wisecat.net>
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
-
-namespace tool_quizbulkedit\local;
-
-use mod_quiz\question\display_options;
-use PHPUnit\Framework\Attributes\CoversClass;
-
-/**
- * Tests for the planner and quiz plans.
- */
+#[CoversClass(bulk_form::class)]
+#[CoversClass(change_request::class)]
 #[CoversClass(planner::class)]
-#[CoversClass(quiz_plan::class)]
+#[CoversClass(applier::class)]
+#[CoversClass(activity_plan::class)]
+#[CoversClass(post_values::class)]
 final class planner_test extends \advanced_testcase {
-    /** @var int all four review times. */
-    private const ALL = display_options::DURING | display_options::IMMEDIATELY_AFTER
-        | display_options::LATER_WHILE_OPEN | display_options::AFTER_CLOSE;
+    use \tool_bass\test_helper_trait;
 
-    /** @var int the three times after the attempt. */
-    private const AFTER = display_options::IMMEDIATELY_AFTER | display_options::LATER_WHILE_OPEN
-        | display_options::AFTER_CLOSE;
-
-    #[\Override]
+    /**
+     * The applier refuses an outer transaction, which PHPUnit opens on PostgreSQL.
+     */
     protected function setUp(): void {
-        global $CFG;
         parent::setUp();
-        require_once($CFG->dirroot . '/mod/quiz/lib.php');
-        require_once($CFG->libdir . '/completionlib.php');
         $this->resetAfterTest();
+        $this->preventResetByRollback();
         $this->setAdminUser();
-        $CFG->enablecompletion = 1;
     }
 
     /**
-     * A course with completion enabled.
+     * Plan a request for some activities.
      *
-     * @param bool $completion
-     * @return \stdClass
+     * @param bulk_form $form
+     * @param \cm_info[] $cms
+     * @return activity_plan[]
      */
-    private function course(bool $completion = true): \stdClass {
-        return $this->getDataGenerator()->create_course(['enablecompletion' => $completion ? 1 : 0]);
+    private function plan(bulk_form $form, array $cms): array {
+        $course = $form->get_representative()->get_course();
+        return (new planner())->plan(
+            (int) $course->id,
+            array_map(fn($cm) => (int) $cm->id, $cms),
+            change_request::from_form($form),
+            $form
+        );
     }
 
     /**
-     * A quiz in a course.
+     * Apply plans.
      *
-     * @param \stdClass $course
-     * @param array $settings quiz settings for the generator
-     * @return \stdClass the quiz record with cmid
+     * @param activity_plan[] $plans
+     * @return apply_result[]
      */
-    private function quiz(\stdClass $course, array $settings = []): \stdClass {
-        return $this->getDataGenerator()->create_module('quiz', ['course' => $course->id] + $settings);
+    private function apply(array $plans): array {
+        $course = reset($plans)->get_cm()->get_course();
+        return (new applier())->apply((int) $course->id, $plans);
     }
 
     /**
-     * Plan one quiz.
-     *
-     * @param \stdClass $course
-     * @param \stdClass $quiz
-     * @param array $changes for change_request::from_array()
-     * @return quiz_plan
+     * The bulk form offers the type's own settings in its own order and leaves out per-activity content.
      */
-    private function plan(\stdClass $course, \stdClass $quiz, array $changes): quiz_plan {
-        $plans = (new planner())->plan($course->id, [$quiz->cmid], change_request::from_array($changes));
-        $this->assertArrayHasKey($quiz->cmid, $plans);
-        return $plans[$quiz->cmid];
+    public function test_form_offers_the_settings_of_the_edit_page(): void {
+        $course = $this->create_bass_course();
+        $quiz = $this->getDataGenerator()->create_module('quiz', ['course' => $course->id]);
+        $this->set_bass_page($course, 'quiz');
+        $form = new bulk_form($this->bass_cm((int) $quiz->cmid), $this->bass_url($course, 'quiz'), null);
+        $names = array_keys($form->get_settings());
+
+        foreach (
+            ['timelimit', 'attempts', 'grademethod', 'shuffleanswers', 'seb_requiresafeexambrowser', 'visible', 'groupmode',
+                'gradepass', bulk_form::MAXGRADE, 'completion'] as $expected
+        ) {
+            $this->assertContains($expected, $names);
+        }
+        foreach (
+            ['name', 'introeditor', 'timeopen', 'timeclose', 'cmidnumber', 'tags', 'filemanager_sebconfigfile',
+                'availabilityconditionsjson'] as $excluded
+        ) {
+            $this->assertNotContains($excluded, $names);
+        }
+        // The order of the quiz form: timing before grade, grade before the review options, SEB before Common module settings.
+        $this->assertLessThan(array_search('gradepass', $names), array_search('timelimit', $names));
+        $this->assertLessThan(array_search('gradepass', $names), array_search(bulk_form::MAXGRADE, $names));
+        $this->assertLessThan(array_search('duringoptionsgrp', $names), array_search('attempts', $names));
+        $this->assertLessThan(array_search('visible', $names), array_search('seb_requiresafeexambrowser', $names));
+        $this->assertTrue($form->get_settings()['completion']['completion']);
+        $this->assertFalse($form->get_settings()['attempts']['completion']);
+
+        $html = $form->render();
+        $this->assertStringContainsString('name="' . bulk_form::CHANGE . '[timelimit]"', $html);
+        $this->assertStringNotContainsString('name="timeopen[', $html);
+        $this->assertStringNotContainsString('name="name"', $html);
     }
 
     /**
-     * Grade to pass as a percentage uses each quiz's own maximum grade and decimal places.
-     *
-     * Fails if the percentage is applied to a shared maximum or rounded with the wrong precision.
+     * Safe Exam Browser set to "use an existing template" on several quizzes.
      */
-    public function test_gradepass_percentage_per_quiz(): void {
-        $course = $this->course();
-        $a = $this->quiz($course, ['grade' => 10, 'decimalpoints' => 2]);
-        $b = $this->quiz($course, ['grade' => 7, 'decimalpoints' => 1]);
-        $request = change_request::from_array(['gradepass' => ['type' => 'percent', 'value' => 33.333]]);
-        $plans = (new planner())->plan($course->id, [$a->cmid, $b->cmid], $request);
+    public function test_seb_template_on_several_quizzes(): void {
+        $course = $this->create_bass_course();
+        $template = $this->getDataGenerator()->get_plugin_generator('quizaccess_seb')->create_template(['name' => 'Exam room']);
+        $quizzes = [];
+        foreach ([10, 20, 15] as $grade) {
+            $quiz = $this->getDataGenerator()->create_module('quiz', ['course' => $course->id, 'grade' => $grade]);
+            $quizzes[] = $this->bass_cm((int) $quiz->cmid);
+        }
+        $this->set_bass_page($course, 'quiz');
+        $form = $this->bass_form($quizzes[0], [
+            'seb_requiresafeexambrowser' => settings_provider::USE_SEB_TEMPLATE,
+            'seb_templateid' => $template->get('id'),
+        ], ['seb_requiresafeexambrowser', 'seb_templateid']);
 
-        // 10 * 33.333 / 100 = 3.3333 -> 3.33; 7 * 33.333 / 100 = 2.33331 -> 2.3.
-        $this->assertSame(3.33, $plans[$a->cmid]->get_final('gradepass'));
-        $this->assertSame(2.3, $plans[$b->cmid]->get_final('gradepass'));
-        $this->assertTrue($plans[$a->cmid]->can_apply());
-        $this->assertTrue($plans[$b->cmid]->can_apply());
+        $plans = $this->plan($form, $quizzes);
+        $label = $form->get_settings()['seb_requiresafeexambrowser']['label'];
+        foreach ($plans as $plan) {
+            $this->assertSame([], $plan->get_errors());
+            $this->assertTrue($plan->can_apply());
+            $this->assertContains($label, array_column($plan->get_rows(), 'label'));
+        }
+        $results = $this->apply($plans);
+
+        foreach ($quizzes as $cm) {
+            $this->assertSame(apply_result::APPLIED, $results[$cm->id]->status, implode(' ', $results[$cm->id]->messages));
+            $settings = seb_quiz_settings::get_record(['quizid' => $cm->instance]);
+            $this->assertNotFalse($settings);
+            $this->assertEquals(settings_provider::USE_SEB_TEMPLATE, $settings->get('requiresafeexambrowser'));
+            $this->assertEquals($template->get('id'), $settings->get('templateid'));
+            // The quiz now demands Safe Exam Browser.
+            $quizobj = \mod_quiz\quiz_settings::create((int) $cm->instance);
+            $this->assertContains('quizaccess_seb', $quizobj->get_access_manager(time())->get_active_rule_names());
+        }
+        // The grades were left alone.
+        $this->assertEquals([10, 20, 15], array_map(fn($cm) => (float) $this->bass_grade_item($cm)->grademax, $quizzes));
     }
 
     /**
-     * The percentage uses the NEW maximum grade and the FINAL decimal places when those change too.
-     *
-     * Fails if the planner reads the current maximum grade or current decimal places.
+     * Grade to pass as a percentage of each assignment's own maximum grade; unticked settings keep each activity's value.
      */
-    public function test_gradepass_percentage_uses_final_max_and_decimals(): void {
-        $course = $this->course();
-        $quiz = $this->quiz($course, ['grade' => 10, 'decimalpoints' => 2]);
-
-        $plan = $this->plan($course, $quiz, ['maxgrade' => 20, 'gradepass' => ['type' => 'percent', 'value' => 50]]);
-        $this->assertSame(10.0, $plan->get_final('gradepass'));
-
-        // 7 * 45 / 100 = 3.15, rounded to 0 decimal places = 3.
-        $plan = $this->plan($course, $quiz, [
-            'maxgrade' => 7,
-            'decimalpoints' => 0,
-            'gradepass' => ['type' => 'percent', 'value' => 45],
-        ]);
-        $this->assertSame(3.0, $plan->get_final('gradepass'));
-        $this->assertSame([], $plan->get_errors());
-    }
-
-    /**
-     * Absolute grade to pass is used as entered.
-     */
-    public function test_gradepass_absolute(): void {
-        $course = $this->course();
-        $quiz = $this->quiz($course, ['grade' => 10]);
-        $plan = $this->plan($course, $quiz, ['gradepass' => ['type' => 'absolute', 'value' => 6.25]]);
-        $this->assertSame(6.25, $plan->get_final('gradepass'));
-        $this->assertSame(['gradepass'], array_keys($plan->get_changes()));
-    }
-
-    /**
-     * Grade to pass above the maximum grade is an error, including when only the maximum is lowered.
-     *
-     * Fails if the check uses the requested gradepass only, or the current maximum.
-     */
-    public function test_gradepass_above_max_is_error(): void {
-        $course = $this->course();
-        $quiz = $this->quiz($course, ['grade' => 10, 'gradepass' => 8]);
-
-        $plan = $this->plan($course, $quiz, ['gradepass' => ['type' => 'absolute', 'value' => 12]]);
-        $this->assertArrayHasKey('gradepassabovemax', $plan->get_errors());
-        $this->assertFalse($plan->can_apply());
-
-        // Lowering the maximum below the unchanged grade to pass.
-        $plan = $this->plan($course, $quiz, ['maxgrade' => 5]);
-        $this->assertArrayHasKey('gradepassabovemax', $plan->get_errors());
-        $this->assertFalse($plan->can_apply());
-
-        // Fixed by setting the grade to pass in the same request.
-        $plan = $this->plan($course, $quiz, ['maxgrade' => 5, 'gradepass' => ['type' => 'percent', 'value' => 80]]);
-        $this->assertSame([], $plan->get_errors());
-        $this->assertSame(4.0, $plan->get_final('gradepass'));
-    }
-
-    /**
-     * With certainty-based marking the grade to pass may exceed the maximum (mod_form.php:621).
-     *
-     * Fails if the CBM exception is dropped or uses the current instead of the final behaviour.
-     */
-    public function test_cbm_exception(): void {
-        $course = $this->course();
-        $cbm = $this->quiz($course, ['grade' => 10, 'preferredbehaviour' => 'deferredcbm']);
-        $plan = $this->plan($course, $cbm, ['gradepass' => ['type' => 'absolute', 'value' => 12]]);
-        $this->assertSame([], $plan->get_errors());
-
-        $plain = $this->quiz($course, ['grade' => 10, 'preferredbehaviour' => 'deferredfeedback']);
-        $plan = $this->plan($course, $plain, [
-            'preferredbehaviour' => 'immediatecbm',
-            'gradepass' => ['type' => 'absolute', 'value' => 12],
-        ]);
-        $this->assertSame([], $plan->get_errors());
-
-        // Leaving CBM with a grade to pass above the maximum is an error.
-        $over = $this->quiz($course, ['grade' => 10, 'gradepass' => 12, 'preferredbehaviour' => 'deferredcbm']);
-        $plan = $this->plan($course, $over, ['preferredbehaviour' => 'deferredfeedback']);
-        $this->assertArrayHasKey('gradepassabovemax', $plan->get_errors());
-    }
-
-    /**
-     * Rule 1: the attempt is always shown during the attempt; overall feedback never is.
-     */
-    public function test_review_rule_attempt_and_overallfeedback_during(): void {
-        $course = $this->course();
-        $quiz = $this->quiz($course, ['preferredbehaviour' => 'interactive']);
-        $plan = $this->plan($course, $quiz, [
-            'review_attempt' => display_options::IMMEDIATELY_AFTER,
-            'review_overallfeedback' => self::ALL,
-        ]);
-        $this->assertSame(display_options::DURING | display_options::IMMEDIATELY_AFTER, $plan->get_final('review_attempt'));
-        $this->assertSame(self::AFTER, $plan->get_final('review_overallfeedback'));
-    }
-
-    /**
-     * Rule 2: options the final behaviour does not use are cleared from the DURING column.
-     *
-     * Fails if the rule is skipped or uses the current behaviour instead of the requested one.
-     */
-    public function test_review_rule_unused_behaviour_options(): void {
-        $course = $this->course();
-        $quiz = $this->quiz($course, ['preferredbehaviour' => 'deferredfeedback']);
-
-        $plan = $this->plan($course, $quiz, ['review_correctness' => self::ALL, 'review_maxmarks' => self::ALL]);
-        $this->assertSame(self::AFTER, $plan->get_final('review_correctness'));
-        // Maximum marks is used by deferred feedback, so it keeps DURING.
-        $this->assertSame(self::ALL, $plan->get_final('review_maxmarks'));
-        $this->assertArrayHasKey('notereviewadjusted', $plan->get_notes());
-
-        // Switching to interactive in the same request: correctness during is kept.
-        $plan = $this->plan($course, $quiz, ['preferredbehaviour' => 'interactive', 'review_correctness' => self::ALL]);
-        $this->assertSame(self::ALL, $plan->get_final('review_correctness'));
-        $this->assertArrayNotHasKey('notereviewadjusted', $plan->get_notes());
-    }
-
-    /**
-     * Rule 3: marks at a time need maximum marks at that time (final value).
-     */
-    public function test_review_rule_marks_need_maxmarks(): void {
+    public function test_gradepass_percent_and_unticked_settings(): void {
         global $DB;
-        $course = $this->course();
-        $quiz = $this->quiz($course, ['preferredbehaviour' => 'interactive']);
-        $DB->set_field(
-            'quiz',
-            'reviewmaxmarks',
-            display_options::DURING | display_options::IMMEDIATELY_AFTER,
-            ['id' => $quiz->id]
+        $course = $this->create_bass_course();
+        $a1 = $this->getDataGenerator()->create_module('assign', ['course' => $course->id, 'grade' => 100, 'maxattempts' => 2]);
+        $a2 = $this->getDataGenerator()->create_module('assign', ['course' => $course->id, 'grade' => 20, 'maxattempts' => 5]);
+        $cms = [$this->bass_cm((int) $a1->cmid), $this->bass_cm((int) $a2->cmid)];
+        $this->set_bass_page($course, 'assign');
+        $form = $this->bass_form(
+            $cms[0],
+            ['gradepass' => '60'],
+            ['gradepass'],
+            [bulk_form::GRADEPASSTYPE => bulk_form::GRADEPASS_PERCENT]
         );
 
-        $plan = $this->plan($course, $quiz, ['review_marks' => self::ALL]);
-        $this->assertSame(display_options::DURING | display_options::IMMEDIATELY_AFTER, $plan->get_final('review_marks'));
-        $this->assertArrayHasKey('notereviewadjusted', $plan->get_notes());
+        $results = $this->apply($this->plan($form, $cms));
 
-        $plan = $this->plan($course, $quiz, ['review_marks' => self::ALL, 'review_maxmarks' => self::ALL]);
-        $this->assertSame(self::ALL, $plan->get_final('review_marks'));
+        $this->assertSame(apply_result::APPLIED, $results[$cms[0]->id]->status, implode(' ', $results[$cms[0]->id]->messages));
+        $this->assertSame(apply_result::APPLIED, $results[$cms[1]->id]->status, implode(' ', $results[$cms[1]->id]->messages));
+        $this->assertEquals(60.0, (float) $this->bass_grade_item($cms[0])->gradepass);
+        $this->assertEquals(12.0, (float) $this->bass_grade_item($cms[1])->gradepass);
+        $this->assertEquals(2, $DB->get_field('assign', 'maxattempts', ['id' => $a1->id]));
+        $this->assertEquals(5, $DB->get_field('assign', 'maxattempts', ['id' => $a2->id]));
     }
 
     /**
-     * Rule 4: after the attempt, correctness and the feedback rows need the attempt row at that time.
+     * Quiz maximum grade and a percentage grade to pass of the new maximum.
      */
-    public function test_review_rule_attempt_dependent_rows(): void {
+    public function test_quiz_maxgrade_and_gradepass_percent(): void {
         global $DB;
-        $course = $this->course();
-        $quiz = $this->quiz($course, ['preferredbehaviour' => 'interactive']);
-        $DB->set_field(
-            'quiz',
-            'reviewattempt',
-            display_options::DURING | display_options::IMMEDIATELY_AFTER,
-            ['id' => $quiz->id]
+        $course = $this->create_bass_course();
+        $quiz = $this->getDataGenerator()->create_module('quiz', ['course' => $course->id, 'grade' => 10]);
+        $cm = $this->bass_cm((int) $quiz->cmid);
+        $this->set_bass_page($course, 'quiz');
+        $form = $this->bass_form(
+            $cm,
+            [bulk_form::MAXGRADE => '40', 'gradepass' => '50'],
+            [bulk_form::MAXGRADE, 'gradepass'],
+            [bulk_form::GRADEPASSTYPE => bulk_form::GRADEPASS_PERCENT]
         );
 
-        $changes = [];
-        foreach (['correctness', 'specificfeedback', 'generalfeedback', 'rightanswer'] as $field) {
-            $changes['review_' . $field] = self::ALL;
-        }
-        // Not attempt-dependent: maxmarks.
-        $changes['review_maxmarks'] = self::ALL;
-        $plan = $this->plan($course, $quiz, $changes);
-        foreach (['correctness', 'specificfeedback', 'generalfeedback', 'rightanswer'] as $field) {
-            $this->assertSame(
-                display_options::DURING | display_options::IMMEDIATELY_AFTER,
-                $plan->get_final('review_' . $field),
-                $field
-            );
-        }
-        $this->assertSame(self::ALL, $plan->get_final('review_maxmarks'));
+        $plans = $this->plan($form, [$cm]);
+        $this->assertSame([], $plans[$cm->id]->get_errors());
+        $results = $this->apply($plans);
 
-        // Opening the attempt row in the same request lets them through.
-        $changes['review_attempt'] = self::ALL;
-        $plan = $this->plan($course, $quiz, $changes);
-        $this->assertSame(self::ALL, $plan->get_final('review_rightanswer'));
+        $this->assertSame(apply_result::APPLIED, $results[$cm->id]->status, implode(' ', $results[$cm->id]->messages));
+        $this->assertEquals(40.0, (float) $DB->get_field('quiz', 'grade', ['id' => $quiz->id]));
+        $this->assertEquals(40.0, (float) $this->bass_grade_item($cm)->grademax);
+        $this->assertEquals(20.0, (float) $this->bass_grade_item($cm)->gradepass);
     }
 
     /**
-     * Rule 5 and individual settability: review rows not in the request are never adjusted,
-     * even when their stored bits break the rules.
-     *
-     * Fails if the planner normalises all eight rows when one is changed.
+     * The activity's own validation refuses a grade to pass above its maximum grade; nothing is written.
      */
-    public function test_review_unchanged_rows_kept_verbatim(): void {
+    public function test_form_validation_refuses_per_activity(): void {
+        $course = $this->create_bass_course();
+        $a1 = $this->getDataGenerator()->create_module('assign', ['course' => $course->id, 'grade' => 100]);
+        $a2 = $this->getDataGenerator()->create_module('assign', ['course' => $course->id, 'grade' => 20]);
+        $cms = [$this->bass_cm((int) $a1->cmid), $this->bass_cm((int) $a2->cmid)];
+        $this->set_bass_page($course, 'assign');
+        $form = $this->bass_form($cms[0], ['gradepass' => '50'], ['gradepass']);
+
+        $plans = $this->plan($form, $cms);
+        $this->assertSame([], $plans[$cms[0]->id]->get_errors());
+        $this->assertCount(1, $plans[$cms[1]->id]->get_errors());
+        $this->assertStringContainsString(get_string('gradepass', 'grades'), $plans[$cms[1]->id]->get_errors()[0]);
+
+        $results = $this->apply($plans);
+        $this->assertSame(apply_result::APPLIED, $results[$cms[0]->id]->status);
+        $this->assertSame(apply_result::SKIPPED, $results[$cms[1]->id]->status);
+        $this->assertEquals(50.0, (float) $this->bass_grade_item($cms[0])->gradepass);
+        $this->assertEquals(0.0, (float) $this->bass_grade_item($cms[1])->gradepass);
+    }
+
+    /**
+     * An activity whose grade item is locked is skipped entirely.
+     */
+    public function test_locked_grade_item_is_skipped(): void {
         global $DB;
-        $course = $this->course();
-        $quiz = $this->quiz($course, ['preferredbehaviour' => 'deferredfeedback']);
-        // Inconsistent stored state: marks without maxmarks; correctness after close without the attempt then.
-        $DB->update_record('quiz', (object) [
-            'id' => $quiz->id,
-            'reviewmaxmarks' => 0,
-            'reviewmarks' => self::ALL,
-            'reviewattempt' => display_options::DURING,
-            'reviewcorrectness' => self::ALL,
-        ]);
+        $course = $this->create_bass_course();
+        $a1 = $this->getDataGenerator()->create_module('assign', ['course' => $course->id, 'maxattempts' => 2]);
+        $cm = $this->bass_cm((int) $a1->cmid);
+        $item = $this->bass_grade_item($cm);
+        $item->set_locked(1);
+        $this->set_bass_page($course, 'assign');
+        $form = $this->bass_form($cm, ['maxattempts' => '4'], ['maxattempts']);
 
-        $plan = $this->plan($course, $quiz, ['review_generalfeedback' => display_options::IMMEDIATELY_AFTER]);
-        $this->assertSame(['review_generalfeedback'], array_keys($plan->get_changes()));
-        $this->assertSame([], $plan->get_cm_completion_changes());
-
-        $plan = $this->plan($course, $quiz, ['shuffleanswers' => 0]);
-        $this->assertSame(['shuffleanswers'], array_keys($plan->get_changes()));
-        $this->assertSame(['shuffleanswers' => 0], $plan->get_quiz_column_changes());
+        $plans = $this->plan($form, [$cm]);
+        $this->assertSame([get_string('error_gradelocked', 'tool_bass')], $plans[$cm->id]->get_errors());
+        $results = $this->apply($plans);
+        $this->assertSame(apply_result::SKIPPED, $results[$cm->id]->status);
+        $this->assertEquals(2, $DB->get_field('assign', 'maxattempts', ['id' => $a1->id]));
     }
 
     /**
-     * A note warns that "after close" review options need a close date.
-     */
-    public function test_note_after_close(): void {
-        global $DB;
-        $course = $this->course();
-        $open = $this->quiz($course, ['preferredbehaviour' => 'interactive']);
-        $DB->set_field('quiz', 'reviewrightanswer', 0, ['id' => $open->id]);
-        $plan = $this->plan($course, $open, ['review_rightanswer' => display_options::AFTER_CLOSE]);
-        $this->assertArrayHasKey('noteafterclose', $plan->get_notes());
-
-        $closing = $this->quiz($course, ['preferredbehaviour' => 'interactive', 'timeclose' => time() + DAYSECS]);
-        $DB->set_field('quiz', 'reviewrightanswer', 0, ['id' => $closing->id]);
-        $plan = $this->plan($course, $closing, ['review_rightanswer' => display_options::AFTER_CLOSE]);
-        $this->assertArrayNotHasKey('noteafterclose', $plan->get_notes());
-    }
-
-    /**
-     * The grace period must exceed the site minimum when overdue attempts get a grace period.
-     */
-    public function test_graceperiod_validation(): void {
-        $course = $this->course();
-        set_config('graceperiodmin', 60, 'quiz');
-        $quiz = $this->quiz($course, ['overduehandling' => 'autosubmit', 'graceperiod' => 30]);
-
-        $plan = $this->plan($course, $quiz, ['overduehandling' => 'graceperiod']);
-        $this->assertArrayHasKey('graceperiodtoosmall', $plan->get_errors());
-
-        $plan = $this->plan($course, $quiz, ['overduehandling' => 'graceperiod', 'graceperiod' => 120]);
-        $this->assertSame([], $plan->get_errors());
-
-        // Not relevant when overdue attempts are not given a grace period.
-        $plan = $this->plan($course, $quiz, ['graceperiod' => 10]);
-        $this->assertSame([], $plan->get_errors());
-    }
-
-    /**
-     * Completion validation mirrors core's forms, on final values.
-     */
-    public function test_completion_validation(): void {
-        $course = $this->course();
-        $quiz = $this->quiz($course, ['completion' => COMPLETION_TRACKING_MANUAL, 'attempts' => 2]);
-
-        $plan = $this->plan($course, $quiz, ['completion' => COMPLETION_TRACKING_AUTOMATIC]);
-        $this->assertArrayHasKey('badautocompletion', $plan->get_errors());
-
-        $plan = $this->plan($course, $quiz, ['completion' => COMPLETION_TRACKING_AUTOMATIC, 'completionpassgrade' => 1]);
-        $this->assertArrayHasKey('passgradeneedsusegrade', $plan->get_errors());
-
-        $plan = $this->plan($course, $quiz, [
-            'completion' => COMPLETION_TRACKING_AUTOMATIC, 'completionusegrade' => 1, 'completionattemptsexhausted' => 1,
-        ]);
-        $this->assertArrayHasKey('exhaustedneedspassgrade', $plan->get_errors());
-
-        // Pass grade needs a grade to pass > 0 (final value).
-        $plan = $this->plan($course, $quiz, [
-            'completion' => COMPLETION_TRACKING_AUTOMATIC, 'completionusegrade' => 1, 'completionpassgrade' => 1,
-        ]);
-        $this->assertArrayHasKey('activitygradetopassnotset', $plan->get_errors());
-        $plan = $this->plan($course, $quiz, [
-            'completion' => COMPLETION_TRACKING_AUTOMATIC, 'completionusegrade' => 1, 'completionpassgrade' => 1,
-            'gradepass' => ['type' => 'percent', 'value' => 50],
-        ]);
-        $this->assertSame([], $plan->get_errors());
-
-        // Minimum attempts above the final attempts allowed.
-        $plan = $this->plan($course, $quiz, ['completion' => COMPLETION_TRACKING_AUTOMATIC, 'completionminattempts' => 3]);
-        $this->assertArrayHasKey('completionminattemptserror', $plan->get_errors());
-        $plan = $this->plan($course, $quiz, [
-            'completion' => COMPLETION_TRACKING_AUTOMATIC, 'completionminattempts' => 3, 'attempts' => 0,
-        ]);
-        $this->assertSame([], $plan->get_errors());
-
-        $plan = $this->plan($course, $quiz, ['completion' => COMPLETION_TRACKING_AUTOMATIC, 'completionview' => 1]);
-        $this->assertSame([], $plan->get_errors());
-        $this->assertTrue($plan->can_apply());
-    }
-
-    /**
-     * Lowering attempts below the existing minimum attempts is caught too.
-     */
-    public function test_attempts_change_checks_minattempts(): void {
-        $course = $this->course();
-        $quiz = $this->quiz($course, [
-            'completion' => COMPLETION_TRACKING_AUTOMATIC, 'completionminattempts' => 3, 'attempts' => 0,
-        ]);
-        $plan = $this->plan($course, $quiz, ['attempts' => 2]);
-        $this->assertArrayHasKey('completionminattemptserror', $plan->get_errors());
-    }
-
-    /**
-     * Completion changes are refused when completion is off for the course.
-     */
-    public function test_completion_disabled(): void {
-        $course = $this->course(false);
-        $quiz = $this->quiz($course);
-        $plan = $this->plan($course, $quiz, ['completion' => COMPLETION_TRACKING_MANUAL, 'attempts' => 3]);
-        $this->assertArrayHasKey('completiondisabled', $plan->get_errors());
-        $this->assertFalse($plan->is_changing('completion'));
-        $this->assertFalse($plan->can_apply());
-    }
-
-    /**
-     * Changing completion with existing completion data warns and needs confirmation;
-     * manual tracking kept manual does not reset.
-     */
-    public function test_completion_reset_warning(): void {
-        global $DB;
-        $course = $this->course();
-        $student = $this->getDataGenerator()->create_and_enrol($course, 'student');
-        $quiz = $this->quiz($course, ['completion' => COMPLETION_TRACKING_MANUAL]);
-
-        $plan = $this->plan($course, $quiz, ['completion' => COMPLETION_TRACKING_AUTOMATIC, 'completionview' => 1]);
-        $this->assertTrue($plan->needs_completion_reset());
-        $this->assertArrayNotHasKey('warncompletionreset', $plan->get_warnings());
-
-        $DB->insert_record('course_modules_completion', (object) [
-            'coursemoduleid' => $quiz->cmid, 'userid' => $student->id,
-            'completionstate' => COMPLETION_COMPLETE, 'timemodified' => time(),
-        ]);
-        $plan = $this->plan($course, $quiz, ['completion' => COMPLETION_TRACKING_AUTOMATIC, 'completionview' => 1]);
-        $this->assertArrayHasKey('warncompletionreset', $plan->get_warnings());
-        $this->assertTrue($plan->needs_confirmation());
-
-        // Manual stays manual: no reset, no warning.
-        $plan = $this->plan($course, $quiz, ['completionview' => 1]);
-        $this->assertTrue($plan->has_changes());
-        $this->assertFalse($plan->needs_completion_reset());
-        $this->assertSame([], $plan->get_warnings());
-    }
-
-    /**
-     * A quiz already holding the requested values is "no change", with no diff rows.
+     * Ticked settings that already have the requested value: no change, nothing saved.
      */
     public function test_no_change(): void {
-        $course = $this->course();
-        $quiz = $this->quiz($course, ['attempts' => 3, 'grade' => 10, 'navmethod' => 'free']);
-        $plan = $this->plan($course, $quiz, ['attempts' => 3, 'maxgrade' => 10.0, 'navmethod' => 'free']);
-        $this->assertFalse($plan->has_changes());
-        $this->assertFalse($plan->can_apply());
-        $this->assertSame([], $plan->get_diff_rows());
-        $this->assertSame([], $plan->get_quiz_column_changes());
-    }
-
-    /**
-     * Diff rows list only differing values, as display text.
-     */
-    public function test_diff_rows(): void {
-        $course = $this->course();
-        $quiz = $this->quiz($course, ['attempts' => 3, 'grade' => 10, 'navmethod' => 'free']);
-        $plan = $this->plan($course, $quiz, ['attempts' => 0, 'maxgrade' => 10, 'navmethod' => 'sequential']);
-        $rows = $plan->get_diff_rows();
-        $this->assertSame(['attempts', 'navmethod'], array_column($rows, 'key'));
-        $this->assertSame('3', $rows[0]['old']);
-        $this->assertSame(get_string('unlimited'), $rows[0]['new']);
-        $this->assertSame(get_string('setting_attempts', 'tool_quizbulkedit'), $rows[0]['label']);
-    }
-
-    /**
-     * A locked grade item blocks grade-affecting changes only.
-     *
-     * Fails if the lock check is removed (core would then print a "regrade anyway" page mid-request).
-     */
-    public function test_locked_gradeitem(): void {
-        $course = $this->course();
-        $quiz = $this->quiz($course, ['grade' => 10]);
-        $item = \grade_item::fetch(['courseid' => $course->id, 'itemtype' => 'mod', 'itemmodule' => 'quiz',
-            'iteminstance' => $quiz->id, 'itemnumber' => 0]);
-        $item->set_locked(true);
-
-        $plan = $this->plan($course, $quiz, ['maxgrade' => 20]);
-        $this->assertArrayHasKey('gradeitemlocked', $plan->get_errors());
-        $plan = $this->plan($course, $quiz, ['grademethod' => QUIZ_ATTEMPTLAST]);
-        $this->assertArrayHasKey('gradeitemlocked', $plan->get_errors());
-        $plan = $this->plan($course, $quiz, ['shuffleanswers' => 0]);
-        $this->assertSame([], $plan->get_errors());
-        $this->assertTrue($plan->is_gradeitem_locked());
-    }
-
-    /**
-     * The fingerprint changes with the request, the selection and the quizzes' state.
-     *
-     * Fails if the fingerprint ignores quiz state (a stale preview could then be applied).
-     */
-    public function test_fingerprint(): void {
         global $DB;
-        $course = $this->course();
-        $a = $this->quiz($course, ['attempts' => 1]);
-        $b = $this->quiz($course, ['attempts' => 1]);
+        $course = $this->create_bass_course();
+        $page = $this->getDataGenerator()->create_module('page', ['course' => $course->id, 'printintro' => 1]);
+        $cm = $this->bass_cm((int) $page->cmid);
+        $revision = $DB->get_field('page', 'revision', ['id' => $page->id]);
+        $this->set_bass_page($course, 'page');
+        $form = $this->bass_form($cm, ['printintro' => '1'], ['printintro']);
+
+        $plans = $this->plan($form, [$cm]);
+        $this->assertFalse($plans[$cm->id]->has_changes());
+        $results = $this->apply($plans);
+        $this->assertSame(apply_result::NOCHANGE, $results[$cm->id]->status);
+        $this->assertEquals($revision, $DB->get_field('page', 'revision', ['id' => $page->id]));
+    }
+
+    /**
+     * Completion changes on an activity with completion data need a confirmation and recalculate completion.
+     */
+    public function test_completion_change_with_completion_data(): void {
+        global $DB;
+        $course = $this->create_bass_course();
+        $student = $this->getDataGenerator()->create_and_enrol($course, 'student');
+        $page = $this->getDataGenerator()->create_module('page', ['course' => $course->id,
+            'completion' => COMPLETION_TRACKING_MANUAL]);
+        $cm = $this->bass_cm((int) $page->cmid);
+        $completion = new \completion_info($course);
+        $completion->update_state($cm, COMPLETION_COMPLETE, $student->id);
+        $this->assertEquals(1, $completion->count_user_data($cm));
+        $this->set_bass_page($course, 'page');
+        $form = $this->bass_form($cm, ['completion' => (string) COMPLETION_TRACKING_NONE], ['completion']);
+
+        $plans = $this->plan($form, [$cm]);
+        $this->assertSame([], $plans[$cm->id]->get_errors());
+        $this->assertTrue($plans[$cm->id]->needs_confirmation());
+        $results = $this->apply($plans);
+
+        $this->assertSame(apply_result::APPLIED, $results[$cm->id]->status, implode(' ', $results[$cm->id]->messages));
+        $this->assertEquals(COMPLETION_TRACKING_NONE, $DB->get_field('course_modules', 'completion', ['id' => $cm->id]));
+        $this->assertFalse($DB->record_exists('course_modules_completion', ['coursemoduleid' => $cm->id]));
+    }
+
+    /**
+     * The fingerprint changes when an activity changes after the preview.
+     */
+    public function test_fingerprint_follows_the_activities(): void {
+        global $DB;
+        $course = $this->create_bass_course();
+        $a1 = $this->getDataGenerator()->create_module('assign', ['course' => $course->id, 'maxattempts' => 2]);
+        $cm = $this->bass_cm((int) $a1->cmid);
+        $this->set_bass_page($course, 'assign');
+        $form = $this->bass_form($cm, ['maxattempts' => '4'], ['maxattempts']);
+        $request = change_request::from_form($form);
+
+        $first = planner::fingerprint($request, $this->plan($form, [$cm]));
+        $this->assertSame($first, planner::fingerprint($request, $this->plan($form, [$cm])));
+        $DB->set_field('assign', 'maxattempts', 3, ['id' => $a1->id]);
+        $this->assertNotSame($first, planner::fingerprint($request, $this->plan($form, [$this->bass_cm((int) $a1->cmid)])));
+    }
+
+    /**
+     * Posted ids of activities of another type, another course or not editable are dropped.
+     */
+    public function test_ineligible_ids_are_rejected(): void {
+        $course = $this->create_bass_course();
+        $other = $this->create_bass_course();
+        $a1 = $this->getDataGenerator()->create_module('assign', ['course' => $course->id]);
+        $page = $this->getDataGenerator()->create_module('page', ['course' => $course->id]);
+        $foreign = $this->getDataGenerator()->create_module('assign', ['course' => $other->id]);
+        $cm = $this->bass_cm((int) $a1->cmid);
+        $this->set_bass_page($course, 'assign');
+        $form = $this->bass_form($cm, ['maxattempts' => '4'], ['maxattempts']);
+
         $planner = new planner();
-        $request = change_request::from_array(['attempts' => 2]);
-
-        $base = $planner->fingerprint($course->id, [$a->cmid, $b->cmid], $request);
-        $this->assertSame($base, $planner->fingerprint($course->id, [$b->cmid, $a->cmid], $request));
-        $this->assertNotSame($base, $planner->fingerprint($course->id, [$a->cmid], $request));
-        $this->assertNotSame($base, $planner->fingerprint(
-            $course->id,
-            [$a->cmid, $b->cmid],
-            change_request::from_array(['attempts' => 3])
-        ));
-
-        $DB->set_field('quiz', 'shuffleanswers', 0, ['id' => $b->id]);
-        $this->assertNotSame($base, $planner->fingerprint($course->id, [$a->cmid, $b->cmid], $request));
+        $plans = $planner->plan(
+            (int) $course->id,
+            [(int) $a1->cmid, (int) $page->cmid, (int) $foreign->cmid],
+            change_request::from_form($form),
+            $form
+        );
+        $this->assertSame([(int) $a1->cmid], array_keys($plans));
+        $this->assertEqualsCanonicalizing([(int) $page->cmid, (int) $foreign->cmid], $planner->get_rejected_cmids());
     }
 }
